@@ -70,6 +70,21 @@ const touched = await ledger.erase(tx, { subject: personId, pseudonym, email });
 uses: `tenant.invoice_paid` is out, `invoice.paid` is in. The core's
 namespaces are the trusted base's.
 
+## A writer for an embedding service
+
+A service that wants a trail (a forum's moderation, a mail admin's writes) gets
+a writer, never the signer. The host binds one per namespace:
+
+```ts
+export const forumAudit = ledger.writer({ namespace: 'thread', handle: db });
+createThreads({ db, gates, audit: forumAudit });
+```
+
+The writer signs `thread.*` and refuses everything else; the actor is whoever
+the service resolved; context, actor class and tenant default to what the
+host bound. A caller passes its transaction as the second argument when the
+row must commit with the change it records.
+
 ## A host's own columns
 
 A host that needs a column beside the ledger's (a team, a region) declares

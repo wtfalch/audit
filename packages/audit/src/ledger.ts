@@ -68,6 +68,48 @@ export interface Page {
   readonly next: { readonly occurredAt: Date; readonly id: number } | null;
 }
 
+/**
+ * What an embedding service hands a bound writer for one row. The namespace
+ * is fixed when the host binds the writer, so `action` must sit in it; the
+ * actor is whoever the service resolved (a forum's `who`, a mail admin's
+ * principal), never chosen by the ledger. Everything else is optional and
+ * defaults as `SignInput` does.
+ */
+export interface WriterEvent {
+  readonly action: string;
+  readonly actor: { readonly id: string; readonly display: string; readonly class?: string };
+  readonly target: { readonly type: string; readonly id: string };
+  readonly tenantId?: string | null;
+  readonly outcome?: string;
+  readonly reason?: string | null;
+  readonly reference?: string | null;
+  readonly before?: unknown;
+  readonly after?: unknown;
+  readonly subject?: { readonly class: string; readonly id: string } | null;
+  readonly request?: SignInput['request'];
+  readonly extra?: SignInput['extra'];
+}
+
+/**
+ * A writer the host bound to one namespace. `handle` is the caller's
+ * transaction when the row must commit with the change it records;
+ * otherwise the handle the host bound.
+ */
+export type AuditWriter = (event: WriterEvent, handle?: Handle) => Promise<void>;
+
+export interface WriterOptions {
+  /** The namespace the writer may sign in: `thread` admits `thread.pinned` and refuses `tenant.created`. */
+  readonly namespace: string;
+  /** The handle used when the caller passes none. */
+  readonly handle: Handle;
+  /** The context every row carries. Defaults to the vocabulary's first context. */
+  readonly context?: string;
+  /** The actor class when the event names none. Defaults to the vocabulary's first actor class. */
+  readonly actorClass?: string;
+  /** The tenant when the event names none. Defaults to null: a row on the estate log. */
+  readonly tenantId?: string | null;
+}
+
 export interface EraseInput {
   readonly subject: string;
   readonly pseudonym: string;
@@ -102,6 +144,12 @@ export interface Ledger {
   erase(handle: Handle, input: EraseInput): Promise<number>;
   /** One tenant's rows, oldest first, for a tenant's export. Deterministic order; no secrets are in this table to omit. */
   exportRows(handle: Handle, tenantId: string): Promise<readonly AuditEventRow[]>;
+  /**
+   * A writer for one embedding service, bound to one namespace. This is what
+   * a host hands to `createThreads({ audit })` or a postmaster: it can write
+   * that namespace's events and nothing else, and it never sees `sign`.
+   */
+  writer(options: WriterOptions): AuditWriter;
 }
 
 const LEDGER_KEYS = new Set(Object.keys(auditEvents_));
@@ -226,5 +274,43 @@ export function createLedger(options: LedgerOptions): Ledger {
       .orderBy(asc(auditEvents.occurredAt), asc(auditEvents.id));
   }
 
-  return { vocabulary, tables: { events: auditEvents }, sign, page, erase, exportRows };
+  function writer(options: WriterOptions): AuditWriter {
+    const { namespace } = options;
+    if (!/^[a-z][a-z0-9_]*$/.test(namespace)) {
+      throw new Error(`audit: "${namespace}" is not a namespace`);
+    }
+    const context = options.context ?? vocabulary.contexts[0];
+    const actorClass = options.actorClass ?? vocabulary.actorClasses[0];
+    if (context === undefined || actorClass === undefined) {
+      throw new Error('audit: the vocabulary has no context or actor class to default to');
+    }
+    return async (event, handle) => {
+      if (!event.action.startsWith(`${namespace}.`)) {
+        throw new Error(
+          `audit: "${event.action}" is outside the namespace "${namespace}" this writer is bound to`,
+        );
+      }
+      await sign(handle ?? options.handle, {
+        action: event.action,
+        tenantId: event.tenantId === undefined ? (options.tenantId ?? null) : event.tenantId,
+        actor: {
+          class: event.actor.class ?? actorClass,
+          id: event.actor.id,
+          display: event.actor.display,
+        },
+        context,
+        target: event.target,
+        outcome: event.outcome,
+        reason: event.reason,
+        reference: event.reference,
+        before: event.before,
+        after: event.after,
+        subject: event.subject,
+        request: event.request,
+        extra: event.extra,
+      });
+    };
+  }
+
+  return { vocabulary, tables: { events: auditEvents }, sign, page, erase, exportRows, writer };
 }

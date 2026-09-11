@@ -423,3 +423,82 @@ describe("a host's own columns", () => {
     expect(await t.query('select count(*)::int as n from audit_events')).toEqual([{ n: 0 }]);
   });
 });
+
+describe('writer', () => {
+  it('signs its own namespace with the bound defaults, and refuses another', async () => {
+    const write = ledger.writer({ namespace: 'invoice', handle: t.db });
+    await write({
+      action: 'invoice.paid',
+      actor: { id: 'u_1', display: 'Ada' },
+      target: { type: 'invoice', id: 'i_1' },
+      after: { amount: 100 },
+    });
+    expect(
+      await t.query(
+        'select action, actor_class, context, tenant_id, tenant_visible, after from audit_events',
+      ),
+    ).toEqual([
+      {
+        action: 'invoice.paid',
+        actor_class: 'human',
+        context: 'standard',
+        tenant_id: null,
+        tenant_visible: true,
+        after: { amount: 100 },
+      },
+    ]);
+    await expect(
+      write({
+        action: 'tenant.created',
+        actor: { id: 'u_1', display: 'Ada' },
+        target: { type: 'tenant', id: TENANT_A },
+      }),
+    ).rejects.toThrow(/outside the namespace "invoice"/);
+    await expect(
+      write({
+        action: 'invoice.refunded',
+        actor: { id: 'u_1', display: 'Ada' },
+        target: { type: 'invoice', id: 'i_1' },
+      }),
+    ).rejects.toThrow(/not an event this ledger's vocabulary declares/);
+    expect(await t.query('select count(*)::int as n from audit_events')).toEqual([{ n: 1 }]);
+  });
+
+  it("writes on the caller's handle when given one, so the row rolls back with the change", async () => {
+    const write = ledger.writer({
+      namespace: 'invoice',
+      handle: t.db,
+      context: 'operator',
+      actorClass: 'service',
+      tenantId: TENANT_B,
+    });
+    await expect(
+      t.db.transaction(async (tx) => {
+        await write(
+          {
+            action: 'invoice.paid',
+            actor: { id: 'job', display: 'Nightly' },
+            target: { type: 'invoice', id: 'i_2' },
+          },
+          tx,
+        );
+        throw new Error('the change failed');
+      }),
+    ).rejects.toThrow('the change failed');
+    expect(await t.query('select count(*)::int as n from audit_events')).toEqual([{ n: 0 }]);
+    await write({
+      action: 'invoice.paid',
+      actor: { id: 'job', display: 'Nightly' },
+      target: { type: 'invoice', id: 'i_2' },
+    });
+    expect(await t.query('select actor_class, context, tenant_id from audit_events')).toEqual([
+      { actor_class: 'service', context: 'operator', tenant_id: TENANT_B },
+    ]);
+  });
+
+  it('refuses a namespace that is not a word', () => {
+    expect(() => ledger.writer({ namespace: 'Invoice.x', handle: t.db })).toThrow(
+      /not a namespace/,
+    );
+  });
+});

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.0 — 2026-09-11
+
+- `ledger.writer({ namespace, handle, context?, actorClass?, tenantId? })`: a
+  writer bound to one namespace for an embedding service. It signs that
+  namespace's events with the actor the service resolved and refuses any
+  other action; the caller may pass its own transaction.
+- `WriterEvent`, `AuditWriter`, `WriterOptions` types.
+
 ## 0.2.0 — 2026-09-11
 
 - `AUDIT_COLUMNS` and `auditIndexes`: a host declares its own table over the

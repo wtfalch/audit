@@ -1,6 +1,6 @@
 {
   "name": "@wtfalch/audit",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "The estate's append-only audit ledger: the table's shape and walls, erasure, export and readers, with a signer a host builds once inside its trusted base and never exports. Per-app Postgres, a host-supplied vocabulary of closed sets, no framework.",
   "repository": {
     "type": "git",
