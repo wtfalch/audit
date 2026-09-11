@@ -1,0 +1,50 @@
+{
+  "name": "@wtfalch/audit",
+  "version": "0.1.0",
+  "description": "The estate's append-only audit ledger: the table's shape and walls, erasure, export and readers, with a signer a host builds once inside its trusted base and never exports. Per-app Postgres, a host-supplied vocabulary of closed sets, no framework.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/wtfalch/audit",
+    "directory": "packages/audit"
+  },
+  "license": "MIT",
+  "type": "module",
+  "files": ["dist"],
+  "bin": {
+    "audit-migrations": "./dist/bin/migrations.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./migrations/*.sql": "./dist/migrations/*.sql",
+    "./package.json": "./package.json"
+  },
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && mkdir -p dist/migrations && cp src/migrations/*.sql dist/migrations/",
+    "prepack": "pnpm build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "drizzle-orm": ">=0.39.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8",
+    "@types/node": "^22",
+    "drizzle-orm": "^0.39.3",
+    "postgres": "^3.4.5",
+    "typescript": "^5.9.0",
+    "vitest": "^4.1.6",
+    "zod": "^4.5.4"
+  }
+}
