@@ -16,7 +16,7 @@ describe.skipIf(!url)('runtime role', () => {
     try {
       const dbName = String((await owner`select current_database() as d`)[0]?.d);
       const rt = `${dbName}_rt`;
-      await owner.unsafe(`drop schema public cascade; create schema public;`);
+      await owner.unsafe('drop schema public cascade; create schema public;');
       await owner.unsafe(
         `do $$ begin if not exists (select 1 from pg_roles where rolname = '${rt}') then create role "${rt}" login password 'rt'; end if; end $$;`,
       );
