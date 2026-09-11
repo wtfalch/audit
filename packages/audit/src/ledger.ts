@@ -1,7 +1,7 @@
 import { and, asc, desc, eq, lt, or, sql } from 'drizzle-orm';
 import type { PgDatabase, PgQueryResultHKT } from 'drizzle-orm/pg-core';
 import { type AuditRow, rowSchema } from './schema.js';
-import { type AuditEventRow, auditEvents } from './tables.js';
+import { type AuditEventRow, type AuditTable, auditEvents as auditEvents_ } from './tables.js';
 import type { LedgerVocabulary } from './vocabulary.js';
 
 /**
@@ -42,6 +42,12 @@ export interface SignInput {
   /** The principal the event is about, when it is not the actor. */
   readonly subject?: { readonly class: string; readonly id: string } | null;
   readonly occurredAt?: Date;
+  /**
+   * Values for the host's own columns, by the drizzle key the host's table
+   * declares them under (`{ teamId }`), written beside the ledger's. Never a
+   * ledger column: those are validated above and refused here.
+   */
+  readonly extra?: Readonly<Record<string, unknown>>;
 }
 
 export interface PageOptions {
@@ -77,9 +83,17 @@ export interface EraseInput {
  * or reads a session: the guarantee that a row's actor is real is the host's,
  * and it holds only while the signer stays private.
  */
+export interface LedgerOptions {
+  readonly vocabulary: LedgerVocabulary;
+  /** The host's own table over `AUDIT_COLUMNS`, when it has columns beside the ledger's. Defaults to the package's `auditEvents`. */
+  readonly table?: AuditTable;
+  /** What `schema_version` every row carries. Defaults to 1; a host whose shared audit words are versioned passes theirs. */
+  readonly schemaVersion?: number;
+}
+
 export interface Ledger {
   readonly vocabulary: LedgerVocabulary;
-  readonly tables: { readonly events: typeof auditEvents };
+  readonly tables: { readonly events: AuditTable };
   /** Validates against the vocabulary and inserts, on the handle given: a transaction when the row must commit with the change it records. */
   sign(handle: Handle, input: SignInput): Promise<void>;
   /** Newest first, keyset on `(occurred_at, id)`. Applies no permission; the host gates and decides `tenantVisibleOnly`. */
@@ -90,9 +104,11 @@ export interface Ledger {
   exportRows(handle: Handle, tenantId: string): Promise<readonly AuditEventRow[]>;
 }
 
-export function createLedger(options: { vocabulary: LedgerVocabulary }): Ledger {
-  const { vocabulary } = options;
-  const schema = rowSchema(vocabulary);
+const LEDGER_KEYS = new Set(Object.keys(auditEvents_));
+
+export function createLedger(options: LedgerOptions): Ledger {
+  const { vocabulary, table: auditEvents = auditEvents_, schemaVersion = 1 } = options;
+  const schema = rowSchema(vocabulary, { schemaVersion });
 
   async function sign(handle: Handle, input: SignInput): Promise<void> {
     const meta = vocabulary.events[input.action];
@@ -121,11 +137,19 @@ export function createLedger(options: { vocabulary: LedgerVocabulary }): Ledger 
       before: input.before ?? null,
       after: input.after ?? null,
       erased_at: null,
-      schema_version: 1,
+      schema_version: schemaVersion,
       subject_class: input.subject?.class ?? null,
       subject_id: input.subject?.id ?? null,
     });
+    const extra = input.extra ?? {};
+    for (const key of Object.keys(extra)) {
+      if (LEDGER_KEYS.has(key))
+        throw new Error(`audit: "${key}" is a ledger column, not a host column`);
+      if (!(key in auditEvents))
+        throw new Error(`audit: the ledger's table has no column "${key}"`);
+    }
     await handle.insert(auditEvents).values({
+      ...(extra as Record<string, never>),
       occurredAt,
       tenantId: row.tenant_id,
       actorClass: row.actor_class,

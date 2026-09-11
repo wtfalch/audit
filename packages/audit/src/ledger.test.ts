@@ -1,5 +1,7 @@
+import { pgTable, uuid } from 'drizzle-orm/pg-core';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { type Ledger, createLedger } from './ledger.js';
+import { AUDIT_COLUMNS, auditIndexes } from './tables.js';
 import { CORE, type TestDb, testDb } from './test/db.js';
 import { ledgerVocabularyFromCore } from './vocabulary.js';
 
@@ -372,5 +374,52 @@ describe('exportRows', () => {
     }
     const rows = await ledger.exportRows(t.db, TENANT_A);
     expect(rows.map((r) => r.targetId)).toEqual(['i_2', 'i_0']);
+  });
+});
+
+describe("a host's own columns", () => {
+  const hostTable = pgTable('audit_events', { ...AUDIT_COLUMNS, teamId: uuid('team_id') }, (t) =>
+    auditIndexes(t),
+  );
+  const host = createLedger({
+    vocabulary: ledgerVocabularyFromCore(CORE),
+    table: hostTable,
+    schemaVersion: 2,
+  });
+
+  beforeEach(async () => {
+    await t.exec('alter table audit_events add column if not exists team_id uuid');
+  });
+
+  it('writes them beside the ledger columns, and carries the configured schema version', async () => {
+    const team = '33333333-3333-4333-8333-333333333333';
+    await host.sign(t.db, {
+      action: 'membership.created',
+      tenantId: TENANT_A,
+      actor: ada,
+      context: 'standard',
+      target: { type: 'membership', id: 'm_1' },
+      extra: { teamId: team },
+    });
+    expect(await t.query('select team_id, schema_version from audit_events')).toEqual([
+      { team_id: team, schema_version: 2 },
+    ]);
+  });
+
+  it('refuses a ledger column or an unknown column through extra', async () => {
+    const base = {
+      action: 'membership.created',
+      tenantId: TENANT_A,
+      actor: ada,
+      context: 'standard',
+      target: { type: 'membership', id: 'm_1' },
+    } as const;
+    await expect(host.sign(t.db, { ...base, extra: { actorId: 'x' } })).rejects.toThrow(
+      /is a ledger column/,
+    );
+    await expect(host.sign(t.db, { ...base, extra: { region: 'eu' } })).rejects.toThrow(
+      /has no column "region"/,
+    );
+    expect(await t.query('select count(*)::int as n from audit_events')).toEqual([{ n: 0 }]);
   });
 });

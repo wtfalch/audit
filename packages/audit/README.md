@@ -70,6 +70,25 @@ const touched = await ledger.erase(tx, { subject: personId, pseudonym, email });
 uses: `tenant.invoice_paid` is out, `invoice.paid` is in. The core's
 namespaces are the trusted base's.
 
+## A host's own columns
+
+A host that needs a column beside the ledger's (a team, a region) declares
+its table over the package's builders and hands it to the ledger:
+
+```ts
+import { AUDIT_COLUMNS, auditIndexes, createLedger } from '@wtfalch/audit';
+
+export const auditEvents = pgTable('audit_events', { ...AUDIT_COLUMNS, teamId: uuid('team_id') }, (t) =>
+  auditIndexes(t),
+);
+const ledger = createLedger({ vocabulary, table: auditEvents, schemaVersion: core.version });
+await ledger.sign(tx, { ...input, extra: { teamId } });
+```
+
+`extra` takes host columns only: a ledger column there is refused, and so is a
+key the table does not declare. The host's own migration adds the column; the
+package's migration never learns of it.
+
 ## Tests
 
 ```sh

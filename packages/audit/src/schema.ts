@@ -60,7 +60,8 @@ const enumOf = (values: readonly string[]) => z.enum([...values] as [string, ...
  * the break-glass context must carry the session, a reason from the closed
  * code set and a reference; every other row's reason is free text.
  */
-export function rowSchema(vocabulary: LedgerVocabulary) {
+export function rowSchema(vocabulary: LedgerVocabulary, options: { schemaVersion?: number } = {}) {
+  const schemaVersion = options.schemaVersion ?? 1;
   const eventNames = Object.keys(vocabulary.events);
   const reasonCodes = new Set(vocabulary.breakGlassReasonCodes ?? []);
   return z
@@ -85,7 +86,7 @@ export function rowSchema(vocabulary: LedgerVocabulary) {
       before: jsonColumn.nullable(),
       after: jsonColumn.nullable(),
       erased_at: z.iso.datetime({ offset: true }).nullable(),
-      schema_version: z.literal(1),
+      schema_version: z.literal(schemaVersion),
       subject_class: enumOf(vocabulary.actorClasses).nullable(),
       subject_id: identifier(AUDIT_LIMITS.id).nullable(),
     })
