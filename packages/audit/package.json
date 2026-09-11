@@ -11,7 +11,7 @@
   "type": "module",
   "files": ["dist"],
   "bin": {
-    "audit-migrations": "./dist/bin/migrations.js"
+    "audit-migrations": "dist/bin/migrations.js"
   },
   "exports": {
     ".": {
