@@ -52,7 +52,8 @@ await db.transaction(async (tx) => {
     tenantId,
     actor: { class: 'human', id: access.principal.id, display: access.principal.display },
     context: 'standard',
-    target: { type: 'invoice', id },
+    target: { type: 'invoice', id, display: invoice.number },
+    tenantDisplay: tenant.name,
     after: { paidAt: now },
     request: requestContext(),
   });
@@ -69,6 +70,23 @@ const touched = await ledger.erase(tx, { subject: personId, pseudonym, email });
 `ledgerVocabularyFromCore` refuses a host event in a namespace the core
 uses: `tenant.invoice_paid` is out, `invoice.paid` is in. The core's
 namespaces are the trusted base's.
+
+## Names, not only ids
+
+`target.display` and `tenantDisplay` are what the target and the tenant were
+CALLED when the row was written. Pass them whenever the caller already holds
+the object, which is nearly always: it is making the change.
+
+The name is stored, not looked up later, because a lookup answers right up
+until it matters. The rows a trail exists for are the deleted file, the closed
+organisation, the revoked key — and by then there is nothing left to join to.
+A later rename does not reach back either: the row says what the thing was
+called at the time, which is what a reader of history wants.
+
+Both are optional and both are null on every row written before 0.4.0, so a
+reader falls back to the id. `audit_erase_person` pseudonymises
+`target_display` when the target is the person being erased; `tenant_display`
+names an organisation, so nothing may change it once written.
 
 ## A writer for an embedding service
 

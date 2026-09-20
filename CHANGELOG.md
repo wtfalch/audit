@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.4.0 — 2026-09-20
+
+- `target_display` and `tenant_display`: what the target and the tenant were
+  CALLED when the row was written, beside their ids. A reader of the trail
+  wants to know what happened to what, and looking the name up at render time
+  fails exactly when it matters -- the file deleted, the organisation closed,
+  the key revoked.
+- `SignInput.target.display` and `SignInput.tenantDisplay` write them. Both
+  are optional: a writer holding only an id is not made to invent a name, and
+  a row written before this version keeps a null.
+- `audit_erase_person` pseudonymises `target_display` on the rows it already
+  erases, where the target is the subject. A target can be a person.
+- The append-only guard admits `target_display` for that erasure and refuses
+  every change to `tenant_display`.
+- `migrations/0002_display.sql`. Copy it with `audit-migrations` as usual.
+
 ## 0.3.0 — 2026-09-11
 
 - `ledger.writer({ namespace, handle, context?, actorClass?, tenantId? })`: a

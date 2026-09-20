@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PGlite } from '@electric-sql/pglite';
@@ -10,7 +10,13 @@ import { tables } from '../tables.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 export const MIGRATIONS = join(here, '..', 'migrations');
-export const MIGRATION_SQL = readFileSync(join(MIGRATIONS, '0001_audit.sql'), 'utf8');
+/** Every migration this package ships, in file order — what a host that copied them all has. */
+export const MIGRATION_FILES = readdirSync(MIGRATIONS)
+  .filter((name) => name.endsWith('.sql'))
+  .sort();
+export const MIGRATION_SQL = MIGRATION_FILES.map((name) =>
+  readFileSync(join(MIGRATIONS, name), 'utf8'),
+).join('\n');
 
 export interface TestDb {
   db: Handle;

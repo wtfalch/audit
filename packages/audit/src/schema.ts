@@ -74,6 +74,10 @@ export function rowSchema(vocabulary: LedgerVocabulary, options: { schemaVersion
       action: enumOf(eventNames).refine((a) => EVENT_PATTERN.test(a)),
       target_type: identifier(AUDIT_LIMITS.targetType),
       target_id: identifier(AUDIT_LIMITS.id),
+      // Nullish rather than nullable: a row written before 0.4.0 carried
+      // neither key, and a caller that has no name to give still parses.
+      target_display: identifier(AUDIT_LIMITS.display).nullish(),
+      tenant_display: identifier(AUDIT_LIMITS.display).nullish(),
       outcome: enumOf(vocabulary.outcomes),
       context: enumOf(vocabulary.contexts),
       session_id: identifier(AUDIT_LIMITS.id).nullable(),

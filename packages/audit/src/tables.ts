@@ -36,6 +36,10 @@ export const AUDIT_COLUMNS = {
   action: text('action').notNull(),
   targetType: text('target_type').notNull(),
   targetId: text('target_id').notNull(),
+  // What the target and the tenant were CALLED when the row was written. Null
+  // on a row written before 0.4.0, and on one whose writer has no name to give.
+  targetDisplay: text('target_display'),
+  tenantDisplay: text('tenant_display'),
   outcome: text('outcome').notNull(),
   context: text('context').notNull(),
   sessionId: text('session_id'),
