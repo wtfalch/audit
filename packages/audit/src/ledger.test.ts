@@ -60,7 +60,46 @@ describe('sign', () => {
       request_id: 'abc123',
       schema_version: 1,
       erased_at: null,
+      target_display: null,
+      tenant_display: null,
     });
+  });
+
+  it('writes what the target and the tenant were called, and keeps null when told nothing', async () => {
+    await ledger.sign(t.db, {
+      action: 'membership.created',
+      tenantId: TENANT_A,
+      tenantDisplay: 'Northwind',
+      actor: ada,
+      context: 'standard',
+      target: { type: 'membership', id: 'm_1', display: 'Bob Brown' },
+    });
+    await ledger.sign(t.db, {
+      action: 'membership.created',
+      tenantId: TENANT_A,
+      actor: ada,
+      context: 'standard',
+      target: { type: 'membership', id: 'm_2' },
+    });
+    const rows = await t.query(
+      'select target_display, tenant_display from audit_events order by id',
+    );
+    expect(rows).toEqual([
+      { target_display: 'Bob Brown', tenant_display: 'Northwind' },
+      { target_display: null, tenant_display: null },
+    ]);
+  });
+
+  it('refuses a name longer than the column allows', async () => {
+    await expect(
+      ledger.sign(t.db, {
+        action: 'membership.created',
+        tenantId: TENANT_A,
+        actor: ada,
+        context: 'standard',
+        target: { type: 'membership', id: 'm_3', display: 'x'.repeat(257) },
+      }),
+    ).rejects.toThrow();
   });
 
   it('follows the vocabulary for tenant visibility and lets a row override it', async () => {
@@ -159,7 +198,7 @@ describe('the walls', () => {
 
   it('refuses an update to anything erasure does not touch', async () => {
     await expect(t.exec("update audit_events set action = 'invoice.refunded'")).rejects.toThrow(
-      /only actor_display, before, after and erased_at may change/,
+      /only actor_display, target_display, before, after and erased_at may change/,
     );
     await expect(t.exec("update audit_events set actor_id = 'someone_else'")).rejects.toThrow(
       /append-only/,
@@ -167,7 +206,13 @@ describe('the walls', () => {
     await expect(t.exec('update audit_events set tenant_visible = false')).rejects.toThrow(
       /append-only/,
     );
+    // The tenant's name is not a person's, so erasure never rewrites it and
+    // nothing else may either -- a "correction" is a new row, not an edit.
+    await expect(t.exec("update audit_events set tenant_display = 'Renamed'")).rejects.toThrow(
+      /append-only/,
+    );
     await t.exec("update audit_events set actor_display = 'Erased'");
+    await t.exec("update audit_events set target_display = 'Erased'");
   });
 
   it('checks the shape of every row in the database too', async () => {
@@ -297,6 +342,24 @@ describe('erase', () => {
       target: { type: 'invoice', id: 'unrelated' },
       after: { by: 'ops' },
     });
+  });
+
+  it("pseudonymises the target's name when the target is the person erased", async () => {
+    await ledger.sign(t.db, {
+      action: 'membership.created',
+      tenantId: TENANT_A,
+      actor: ops,
+      context: 'operator',
+      target: { type: 'human', id: 'user_ada', display: 'Ada Lovelace' },
+      subject: { class: 'human', id: 'user_ada' },
+    });
+    await t.db.transaction((tx) =>
+      ledger.erase(tx, { subject: 'user_ada', pseudonym: 'Erased person 7' }),
+    );
+    const rows = await t.query(
+      "select target_display from audit_events where target_id = 'user_ada'",
+    );
+    expect(rows).toEqual([{ target_display: 'Erased person 7' }]);
   });
 
   it("pseudonymises the person's rows, rows about them and rows naming them; keeps the count", async () => {

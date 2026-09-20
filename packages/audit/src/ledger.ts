@@ -25,7 +25,15 @@ export interface SignInput {
   readonly tenantId: string | null;
   readonly actor: Actor;
   readonly context: string;
-  readonly target: { readonly type: string; readonly id: string };
+  /**
+   * `display` is what the target was CALLED when this happened, written into
+   * the row beside its id so the row still reads after the target is gone. A
+   * caller that holds the object passes it; one that does not omits it and the
+   * row keeps the id alone.
+   */
+  readonly target: { readonly type: string; readonly id: string; readonly display?: string | null };
+  /** What the tenant was called when this happened, for the same reason. */
+  readonly tenantDisplay?: string | null;
   readonly outcome?: string;
   readonly sessionId?: string | null;
   readonly reason?: string | null;
@@ -173,6 +181,8 @@ export function createLedger(options: LedgerOptions): Ledger {
       action: input.action,
       target_type: input.target.type,
       target_id: input.target.id,
+      target_display: input.target.display ?? null,
+      tenant_display: input.tenantDisplay ?? null,
       outcome: input.outcome ?? vocabulary.outcomes[0],
       context: input.context,
       session_id: input.sessionId ?? null,
@@ -206,6 +216,8 @@ export function createLedger(options: LedgerOptions): Ledger {
       action: row.action,
       targetType: row.target_type,
       targetId: row.target_id,
+      targetDisplay: row.target_display,
+      tenantDisplay: row.tenant_display,
       outcome: row.outcome,
       context: row.context,
       sessionId: row.session_id,
