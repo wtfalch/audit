@@ -122,6 +122,35 @@ await ledger.sign(tx, { ...input, extra: { teamId } });
 key the table does not declare. The host's own migration adds the column; the
 package's migration never learns of it.
 
+## A service with no tenant database
+
+Nothing in the ledger is per-app. A service that is not a tenant app, such as
+foundry recording who ran which plan, needs three things:
+
+- its own closed vocabulary through `ledgerVocabulary({ events, actorClasses,
+  contexts, outcomes })`, with no `@wtfalch/authz` core;
+- `tenantId: null` on every row, with what the row is about as the `target`
+  (`{ type: 'org', id: orgId }`);
+- a Postgres of its own, with these migrations applied.
+
+```ts
+const ledger = createLedger({
+  vocabulary: ledgerVocabulary({
+    events: { 'plan.computed': { tenantVisible: false }, 'plan.applied': { tenantVisible: false } },
+    actorClasses: ['human', 'service'],
+    contexts: ['operator'],
+    outcomes: ['success', 'refused', 'failed'],
+  }),
+  hashChain: true,
+});
+await ledger.sign(db, {
+  action: 'plan.applied', tenantId: null, actor, context: 'operator',
+  outcome: 'refused', reason, target: { type: 'org', id: orgId }, after: plan,
+});
+```
+
+The database is the one thing the package cannot supply.
+
 ## Tenant isolation in the database
 
 `migrations/0005_rls.sql` turns on row-level security. For every role but the
