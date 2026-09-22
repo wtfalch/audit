@@ -36,6 +36,15 @@
 - `toCef`/`toCefLines`: a ledger row as a CEF line, for forwarding a
   tenant's security events to their own SIEM. Serialisation only; the
   transport stays the host's.
+- Row-level security on `audit_events` (`migrations/0005_rls.sql`) and
+  `scopeAuditTenant(tx, tenantId)`: a tenant-scoped transaction sees only
+  that tenant's rows, for every role but the owner. `alter role <db>_rt set
+  audit.require_tenant = 'on'` makes an unscoped read see nothing. Unscoped
+  and unrequired, reads are unchanged.
+- With `hashChain` on, `sign()` and `erase()` read the chain tail and the
+  pending erasures through two security definer functions added in 0005, so
+  a tenant scope cannot fork the chain or hide pending erasures. **Apply 0005
+  before deploying this version** if `hashChain` is on.
 
 ## 0.4.0 — 2026-09-20
 
