@@ -269,6 +269,11 @@ export function createLedger(options: LedgerOptions): Ledger {
   }
 
   async function erase(handle: Handle, input: EraseInput): Promise<number> {
+    if (input.email === '') {
+      throw new Error(
+        'audit: erase: an empty email matches every row; omit email or pass the address',
+      );
+    }
     const result = await handle.execute(
       sql`select audit_erase_person(${input.subject}, ${input.pseudonym}, ${input.email ?? null}) as n`,
     );

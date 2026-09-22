@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- Fix: `audit_erase_person` lost its empty-email guard and its lower-casing
+  in 0002_display.sql, so an empty email reached the SQL `LIKE` match as
+  `like '%%'` and wiped `before`/`after` on every tenant's rows, not just the
+  subject's. `migrations/0003_erase_email_guard.sql` restores both. Shipped
+  migrations don't change, so this ships as a new file; copy it with
+  `audit-migrations` as usual.
+- `ledger.erase()` now refuses an empty `email` outright, instead of passing
+  it through to the SQL function.
+
 ## 0.4.0 — 2026-09-20
 
 - `target_display` and `tenant_display`: what the target and the tenant were
