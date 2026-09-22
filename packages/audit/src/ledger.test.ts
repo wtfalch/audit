@@ -198,7 +198,7 @@ describe('the walls', () => {
 
   it('refuses an update to anything erasure does not touch', async () => {
     await expect(t.exec("update audit_events set action = 'invoice.refunded'")).rejects.toThrow(
-      /only actor_display, target_display, before, after and erased_at may change/,
+      /only actor_display, target_display, before, after, erased_at, content_salt and erasure_hash may change/,
     );
     await expect(t.exec("update audit_events set actor_id = 'someone_else'")).rejects.toThrow(
       /append-only/,

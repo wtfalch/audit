@@ -19,6 +19,14 @@
   `occurredFrom`/`occurredTo`, an inclusive range on `occurred_at`. An
   operator investigation no longer has to bypass the package for raw SQL to
   get either.
+- Hash chaining, the schema and the pure math: five nullable columns
+  (`prev_hash`, `row_hash`, `content_hash`, `content_salt`, `erasure_hash`,
+  `migrations/0004_chain.sql`) and `chain.ts`'s `sealRow`/`verifyChain`/
+  `computeErasureHash`, porting `@wtfalch/authz`'s audit-chain design onto
+  this package's columns. Nothing writes these columns yet -- `createLedger`
+  gains no new option in this release -- so this alone changes no ledger's
+  behaviour; it lands the tamper-evidence math and its migration ahead of
+  the `sign()`/`erase()` wiring that uses it.
 
 ## 0.4.0 — 2026-09-20
 

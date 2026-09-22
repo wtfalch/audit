@@ -49,4 +49,50 @@ describe.skipIf(!url)('runtime role', () => {
       await owner.end();
     }
   });
+
+  it('may seal a pending erasure and take the chain lock, but still not update directly', async () => {
+    if (!url) return;
+    const owner = postgres(url, { prepare: false, max: 2 });
+    try {
+      const dbName = String((await owner`select current_database() as d`)[0]?.d);
+      const rt = `${dbName}_rt`;
+      await owner.unsafe('drop schema public cascade; create schema public;');
+      await owner.unsafe(
+        `do $$ begin if not exists (select 1 from pg_roles where rolname = '${rt}') then create role "${rt}" login password 'rt'; end if; end $$;`,
+      );
+      await owner.unsafe(`grant usage on schema public to "${rt}"`);
+      await owner.unsafe(MIGRATION_SQL);
+      await owner.unsafe(`grant select, insert on audit_events to "${rt}"`);
+
+      const asRt = async (text: string) => {
+        await owner.unsafe(`set role "${rt}"`);
+        try {
+          return await owner.unsafe(text);
+        } finally {
+          await owner.unsafe('reset role');
+        }
+      };
+
+      // pg_advisory_xact_lock: no grant needed, available to any role by default.
+      await asRt("select pg_advisory_xact_lock(hashtextextended('x', 0))");
+
+      const hash64 = (c: string) => c.repeat(64);
+      await asRt(
+        `insert into audit_events (actor_class, actor_id, actor_display, action, target_type, target_id, outcome, context, tenant_visible, row_hash, content_hash, content_salt) values ('human','u1','U','x.y','t','1','success','standard',true,'${hash64('a')}','${hash64('b')}','${hash64('c')}')`,
+      );
+      await expect(
+        asRt(`update audit_events set content_salt = null, erasure_hash = '${hash64('f')}'`),
+      ).rejects.toThrow(/permission denied/);
+
+      const erased = await asRt("select audit_erase_person('u1', 'Erased', null) as n");
+      expect(Number(erased[0]?.n)).toBe(1);
+
+      const [id] = await asRt('select id from audit_events');
+      await asRt(`select audit_seal_erasure(${id?.id}, '${hash64('f')}')`);
+      const [row] = await asRt('select content_salt, erasure_hash from audit_events');
+      expect(row).toMatchObject({ content_salt: null, erasure_hash: hash64('f') });
+    } finally {
+      await owner.end();
+    }
+  });
 });
