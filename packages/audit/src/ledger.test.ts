@@ -301,6 +301,48 @@ describe('page', () => {
     expect((await ledger.page(t.db, { tenantId: null })).items).toHaveLength(0);
   });
 
+  it('filters by action prefix and an occurred_at range', async () => {
+    const base = new Date('2026-09-11T10:00:00Z').getTime();
+    expect(
+      (await ledger.page(t.db, { actionPrefix: 'invoice.' })).items.map((r) => r.targetId),
+    ).toEqual(['i_6', 'i_4', 'i_2', 'i_0']);
+    expect((await ledger.page(t.db, { actionPrefix: 'tenant.' })).items).toHaveLength(3);
+    // occurredFrom and occurredTo are both inclusive; i_2..i_4 fall between them.
+    expect(
+      (
+        await ledger.page(t.db, {
+          occurredFrom: new Date(base + 2000),
+          occurredTo: new Date(base + 4000),
+        })
+      ).items.map((r) => r.targetId),
+    ).toEqual(['i_4', 'i_3', 'i_2']);
+    // Combined: only the range's invoice.paid rows.
+    expect(
+      (
+        await ledger.page(t.db, {
+          actionPrefix: 'invoice.',
+          occurredFrom: new Date(base + 2000),
+          occurredTo: new Date(base + 4000),
+        })
+      ).items.map((r) => r.targetId),
+    ).toEqual(['i_4', 'i_2']);
+  });
+
+  it('escapes % and _ in actionPrefix so they match themselves, not any character', async () => {
+    // A raw insert, not ledger.sign(): CORE's vocabulary has no pair of real
+    // event names that differ only at an underscore, so proving the escape
+    // holds at the SQL layer needs actions outside the closed set.
+    await t.exec(
+      'insert into audit_events (actor_class, actor_id, actor_display, action, target_type, target_id, outcome, context, tenant_visible) values ' +
+        "('human','u1','U','x.a_b','t','esc_literal','success','standard',true)," +
+        "('human','u1','U','x.axb','t','esc_wildcard','success','standard',true)",
+    );
+    // Unescaped, '_' in the pattern would match any single character, so
+    // 'x.a_b%' would also match 'x.axb'. It must not.
+    const matched = await ledger.page(t.db, { actionPrefix: 'x.a_b' });
+    expect(matched.items.map((r) => r.targetId)).toEqual(['esc_literal']);
+  });
+
   it('clamps the page size', async () => {
     expect((await ledger.page(t.db, { limit: 0 })).items).toHaveLength(1);
     expect((await ledger.page(t.db, { limit: 10_000 })).items).toHaveLength(7);
