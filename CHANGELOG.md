@@ -33,6 +33,9 @@
   `audit_events` intact. Off by default: it serializes every `sign()` call
   in that ledger, which a host that does not need tamper evidence should
   not pay for.
+- `toCef`/`toCefLines`: a ledger row as a CEF line, for forwarding a
+  tenant's security events to their own SIEM. Serialisation only; the
+  transport stays the host's.
 
 ## 0.4.0 — 2026-09-20
 
