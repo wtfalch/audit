@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.0 — 2026-09-23
 
 - Fix: `audit_erase_person` lost its empty-email guard and its lower-casing
   in 0002_display.sql, so an empty email reached the SQL `LIKE` match as
