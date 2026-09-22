@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, isNotNull, isNull, like, lt, lte, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, like, lt, lte, or, sql } from 'drizzle-orm';
 import type { PgDatabase, PgQueryResultHKT } from 'drizzle-orm/pg-core';
 import { computeErasureHash, sealRow } from './chain.js';
 import { type AuditRow, rowSchema } from './schema.js';
@@ -194,6 +194,29 @@ const LEDGER_KEYS = new Set(Object.keys(auditEvents_));
 // is what a reader checks, not an opaque bigint.
 const CHAIN_LOCK_NAME = 'wtfalch/audit chain';
 
+/** `execute()`'s rows: postgres-js returns an array, PGlite an object holding one. */
+function resultRows<T>(result: unknown): T[] {
+  return Array.isArray(result) ? (result as T[]) : ((result as { rows?: T[] }).rows ?? []);
+}
+
+/**
+ * Scopes every read of `audit_events` on `tx` to one tenant, for the rest of
+ * that transaction: row-level security (migrations/0005_rls.sql) then hides
+ * every other tenant's rows, and the estate's own tenant-null rows, whatever
+ * predicate a query forgot. `set_config(..., true)` is transaction-local, so
+ * call it inside a transaction; outside one it lasts a single statement.
+ *
+ * Holds for every role but the table's owner. Pair it with
+ * `alter role <database>_rt set audit.require_tenant = 'on'` and a read that
+ * forgot to scope sees nothing instead of everything.
+ */
+export async function scopeAuditTenant(tx: Handle, tenantId: string): Promise<void> {
+  if (tenantId === '') {
+    throw new Error('audit: scopeAuditTenant: an empty tenant id would unscope, not scope');
+  }
+  await tx.execute(sql`select set_config('audit.tenant_id', ${tenantId}, true)`);
+}
+
 export function createLedger(options: LedgerOptions): Ledger {
   const {
     vocabulary,
@@ -280,18 +303,19 @@ export function createLedger(options: LedgerOptions): Ledger {
     // exactly this row's seal-and-insert and released at commit.
     await handle.transaction(async (tx) => {
       await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${CHAIN_LOCK_NAME}, 0))`);
-      const [tail] = await tx
-        .select({ rowHash: auditEvents.rowHash })
-        .from(auditEvents)
-        .orderBy(desc(auditEvents.id))
-        .limit(1);
+      // Through audit_chain_tail() (security definer, 0005_rls.sql), not a
+      // select on the table: under a tenant scope RLS hides every other
+      // tenant's rows, and the chain is one chain across all of them.
+      const [tail] = resultRows<{ h: string | null }>(
+        await tx.execute(sql`select audit_chain_tail() as h`),
+      );
       const sealed = await sealRow(
         {
           ...row,
           target_display: row.target_display ?? null,
           tenant_display: row.tenant_display ?? null,
         },
-        tail?.rowHash ?? null,
+        tail?.h ?? null,
       );
       await tx.insert(auditEvents).values({
         ...values,
@@ -351,9 +375,7 @@ export function createLedger(options: LedgerOptions): Ledger {
     const result = await handle.execute(
       sql`select audit_erase_person(${input.subject}, ${input.pseudonym}, ${input.email ?? null}) as n`,
     );
-    const rows = Array.isArray(result)
-      ? (result as { n: unknown }[])
-      : ((result as { rows?: { n: unknown }[] }).rows ?? []);
+    const rows = resultRows<{ n: unknown }>(result);
     const touched = Number(rows[0]?.n ?? 0);
     if (hashChain) {
       // Chain-sealed rows audit_erase_person (unchanged by this option, and
@@ -361,23 +383,17 @@ export function createLedger(options: LedgerOptions): Ledger {
       // the erasure of -- not scoped to this call's subject, so a process
       // that died between the two steps of an earlier erase() call is
       // healed by the next one, for any subject.
-      const pending = await handle
-        .select({
-          id: auditEvents.id,
-          rowHash: auditEvents.rowHash,
-          erasedAt: auditEvents.erasedAt,
-        })
-        .from(auditEvents)
-        .where(
-          and(
-            isNotNull(auditEvents.rowHash),
-            isNotNull(auditEvents.erasedAt),
-            isNull(auditEvents.erasureHash),
-          ),
-        );
+      // Through audit_pending_erasures() (security definer, 0005_rls.sql):
+      // RLS would otherwise limit the sweep to the current tenant scope, or
+      // to nothing under audit.require_tenant.
+      const pending = resultRows<{ id: unknown; row_hash: string | null; erased_at: unknown }>(
+        await handle.execute(sql`select id, row_hash, erased_at from audit_pending_erasures()`),
+      );
       for (const row of pending) {
-        if (!row.rowHash || !row.erasedAt) continue;
-        const erasureHash = await computeErasureHash(row.rowHash, row.erasedAt);
+        if (!row.row_hash || row.erased_at === null || row.erased_at === undefined) continue;
+        const erasedAt =
+          row.erased_at instanceof Date ? row.erased_at : new Date(String(row.erased_at));
+        const erasureHash = await computeErasureHash(row.row_hash, erasedAt);
         // Not handle.update(): the runtime role has no UPDATE on
         // audit_events at all (0001's revoke); audit_seal_erasure (security
         // definer, migrations/0004_chain.sql) is the door back in, the same

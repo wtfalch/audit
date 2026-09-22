@@ -122,6 +122,37 @@ await ledger.sign(tx, { ...input, extra: { teamId } });
 key the table does not declare. The host's own migration adds the column; the
 package's migration never learns of it.
 
+## Tenant isolation in the database
+
+`migrations/0005_rls.sql` turns on row-level security. For every role but the
+table's owner, a read inside a tenant-scoped transaction sees that tenant's
+rows and nothing else, whatever predicate the query forgot:
+
+```ts
+import { scopeAuditTenant } from '@wtfalch/audit';
+
+await db.transaction(async (tx) => {
+  await scopeAuditTenant(tx, tenantId); // set_config('audit.tenant_id', ..., true)
+  const page = await ledger.page(tx, { tenantId, tenantVisibleOnly: true });
+});
+```
+
+Unscoped reads still see every row, so applying the migration changes nothing
+until the host scopes. To make a forgotten scope see nothing instead, set it
+on the role the app connects as:
+
+```sql
+alter role <database>_rt set audit.require_tenant = 'on';
+```
+
+An operator surface that reads across tenants then connects as another role.
+Which role that is belongs to the host. An app that connects as the table's
+owner gets no RLS at all.
+
+With `hashChain` on, `sign()` and `erase()` now read the chain tail and the
+pending erasures through `audit_chain_tail()` and `audit_pending_erasures()`,
+both added in 0005. Apply 0005 before deploying this version.
+
 ## To a customer's SIEM
 
 `toCef(row)` renders one ledger row as a CEF (Common Event Format) line, the

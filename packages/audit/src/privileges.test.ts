@@ -87,6 +87,12 @@ describe.skipIf(!url)('runtime role', () => {
       const erased = await asRt("select audit_erase_person('u1', 'Erased', null) as n");
       expect(Number(erased[0]?.n)).toBe(1);
 
+      // 0005_rls.sql's two doors, which read past a tenant scope.
+      const [tail] = await asRt('select audit_chain_tail() as h');
+      expect(tail?.h).toBe(hash64('a'));
+      const pendingRows = await asRt('select id from audit_pending_erasures()');
+      expect(pendingRows).toHaveLength(1);
+
       const [id] = await asRt('select id from audit_events');
       await asRt(`select audit_seal_erasure(${id?.id}, '${hash64('f')}')`);
       const [row] = await asRt('select content_salt, erasure_hash from audit_events');
