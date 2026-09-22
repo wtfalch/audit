@@ -1,5 +1,6 @@
-import { and, asc, desc, eq, gte, like, lt, lte, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, isNotNull, isNull, like, lt, lte, or, sql } from 'drizzle-orm';
 import type { PgDatabase, PgQueryResultHKT } from 'drizzle-orm/pg-core';
+import { computeErasureHash, sealRow } from './chain.js';
 import { type AuditRow, rowSchema } from './schema.js';
 import { type AuditEventRow, type AuditTable, auditEvents as auditEvents_ } from './tables.js';
 import type { LedgerVocabulary } from './vocabulary.js';
@@ -151,6 +152,18 @@ export interface LedgerOptions {
   readonly table?: AuditTable;
   /** What `schema_version` every row carries. Defaults to 1; a host whose shared audit words are versioned passes theirs. */
   readonly schemaVersion?: number;
+  /**
+   * Chain every row's hash to the one before it (`chain.ts`'s `sealRow`,
+   * verified back with `verifyChain`), so an edit or a deleted row is
+   * detectable without trusting Postgres privileges alone. Off by default:
+   * every `sign()` call then opens a transaction (a savepoint, if `handle`
+   * already is one) and serializes against the chain's advisory lock, which
+   * a host that does not need tamper evidence should not pay for. Needs
+   * `migrations/0004_chain.sql`; a row written before it, or before this was
+   * turned on, has no hash and `verifyChain` reports it unsealed rather than
+   * verified.
+   */
+  readonly hashChain?: boolean;
 }
 
 export interface Ledger {
@@ -174,8 +187,20 @@ export interface Ledger {
 
 const LEDGER_KEYS = new Set(Object.keys(auditEvents_));
 
+// Fixed and arbitrary; only its stability matters. Every sign() call with
+// hashChain on takes this same pg_advisory_xact_lock key, so two rows can
+// never be sealed onto the same tail at once. hashtextextended computes it
+// from the name at call time rather than a hard-coded number, so the name
+// is what a reader checks, not an opaque bigint.
+const CHAIN_LOCK_NAME = 'wtfalch/audit chain';
+
 export function createLedger(options: LedgerOptions): Ledger {
-  const { vocabulary, table: auditEvents = auditEvents_, schemaVersion = 1 } = options;
+  const {
+    vocabulary,
+    table: auditEvents = auditEvents_,
+    schemaVersion = 1,
+    hashChain = false,
+  } = options;
   const schema = rowSchema(vocabulary, { schemaVersion });
 
   async function sign(handle: Handle, input: SignInput): Promise<void> {
@@ -218,7 +243,7 @@ export function createLedger(options: LedgerOptions): Ledger {
       if (!(key in auditEvents))
         throw new Error(`audit: the ledger's table has no column "${key}"`);
     }
-    await handle.insert(auditEvents).values({
+    const values = {
       ...(extra as Record<string, never>),
       occurredAt,
       tenantId: row.tenant_id,
@@ -244,6 +269,37 @@ export function createLedger(options: LedgerOptions): Ledger {
       schemaVersion: row.schema_version,
       subjectClass: row.subject_class,
       subjectId: row.subject_id,
+    };
+    if (!hashChain) {
+      await handle.insert(auditEvents).values(values);
+      return;
+    }
+    // The lock, the tail read and the insert all happen on `tx`: a plain
+    // handle opens a real transaction, a handle that is already one (the
+    // caller's own) opens a savepoint, so either way the lock is held for
+    // exactly this row's seal-and-insert and released at commit.
+    await handle.transaction(async (tx) => {
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${CHAIN_LOCK_NAME}, 0))`);
+      const [tail] = await tx
+        .select({ rowHash: auditEvents.rowHash })
+        .from(auditEvents)
+        .orderBy(desc(auditEvents.id))
+        .limit(1);
+      const sealed = await sealRow(
+        {
+          ...row,
+          target_display: row.target_display ?? null,
+          tenant_display: row.tenant_display ?? null,
+        },
+        tail?.rowHash ?? null,
+      );
+      await tx.insert(auditEvents).values({
+        ...values,
+        prevHash: sealed.prev_hash,
+        rowHash: sealed.row_hash,
+        contentHash: sealed.content_hash,
+        contentSalt: sealed.content_salt,
+      });
     });
   }
 
@@ -298,7 +354,38 @@ export function createLedger(options: LedgerOptions): Ledger {
     const rows = Array.isArray(result)
       ? (result as { n: unknown }[])
       : ((result as { rows?: { n: unknown }[] }).rows ?? []);
-    return Number(rows[0]?.n ?? 0);
+    const touched = Number(rows[0]?.n ?? 0);
+    if (hashChain) {
+      // Chain-sealed rows audit_erase_person (unchanged by this option, and
+      // by migrations already shipped) has erased but not yet chain-sealed
+      // the erasure of -- not scoped to this call's subject, so a process
+      // that died between the two steps of an earlier erase() call is
+      // healed by the next one, for any subject.
+      const pending = await handle
+        .select({
+          id: auditEvents.id,
+          rowHash: auditEvents.rowHash,
+          erasedAt: auditEvents.erasedAt,
+        })
+        .from(auditEvents)
+        .where(
+          and(
+            isNotNull(auditEvents.rowHash),
+            isNotNull(auditEvents.erasedAt),
+            isNull(auditEvents.erasureHash),
+          ),
+        );
+      for (const row of pending) {
+        if (!row.rowHash || !row.erasedAt) continue;
+        const erasureHash = await computeErasureHash(row.rowHash, row.erasedAt);
+        // Not handle.update(): the runtime role has no UPDATE on
+        // audit_events at all (0001's revoke); audit_seal_erasure (security
+        // definer, migrations/0004_chain.sql) is the door back in, the same
+        // shape as audit_erase_person's.
+        await handle.execute(sql`select audit_seal_erasure(${row.id}, ${erasureHash})`);
+      }
+    }
+    return touched;
   }
 
   async function exportRows(handle: Handle, tenantId: string): Promise<readonly AuditEventRow[]> {

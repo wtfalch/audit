@@ -23,10 +23,16 @@
   (`prev_hash`, `row_hash`, `content_hash`, `content_salt`, `erasure_hash`,
   `migrations/0004_chain.sql`) and `chain.ts`'s `sealRow`/`verifyChain`/
   `computeErasureHash`, porting `@wtfalch/authz`'s audit-chain design onto
-  this package's columns. Nothing writes these columns yet -- `createLedger`
-  gains no new option in this release -- so this alone changes no ledger's
-  behaviour; it lands the tamper-evidence math and its migration ahead of
-  the `sign()`/`erase()` wiring that uses it.
+  this package's columns.
+- `createLedger({ hashChain: true })`, opt in: wires the math above into
+  `sign()` and `erase()`, so the columns above stop being unwritten. `sign()`
+  seals and inserts inside an advisory-locked transaction, so concurrent
+  writers chain onto the true tail rather than forking it; `erase()`
+  chain-seals a row `audit_erase_person` has erased through
+  `audit_seal_erasure`, keeping the runtime role's lack of `UPDATE` on
+  `audit_events` intact. Off by default: it serializes every `sign()` call
+  in that ledger, which a host that does not need tamper evidence should
+  not pay for.
 
 ## 0.4.0 — 2026-09-20
 

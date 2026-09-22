@@ -1,5 +1,6 @@
 import { pgTable, uuid } from 'drizzle-orm/pg-core';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { verifyChain } from './chain.js';
 import { type Ledger, createLedger } from './ledger.js';
 import { AUDIT_COLUMNS, auditIndexes } from './tables.js';
 import { CORE, type TestDb, testDb } from './test/db.js';
@@ -12,12 +13,13 @@ const ops = { class: 'human', id: 'op_1', display: 'Ops' };
 
 let t: TestDb;
 let ledger: Ledger;
+let chainedLedger: Ledger;
 
 beforeAll(async () => {
   t = await testDb();
-  ledger = createLedger({
-    vocabulary: ledgerVocabularyFromCore(CORE, { 'invoice.paid': { tenantVisible: true } }),
-  });
+  const vocabulary = ledgerVocabularyFromCore(CORE, { 'invoice.paid': { tenantVisible: true } });
+  ledger = createLedger({ vocabulary });
+  chainedLedger = createLedger({ vocabulary, hashChain: true });
 });
 afterAll(async () => {
   await t.close();
@@ -658,5 +660,126 @@ describe('writer', () => {
     expect(() => ledger.writer({ namespace: 'Invoice.x', handle: t.db })).toThrow(
       /not a namespace/,
     );
+  });
+});
+
+describe('hash chain (createLedger({ hashChain: true }))', () => {
+  it('leaves every chain column null when it is off, the default', async () => {
+    await ledger.sign(t.db, {
+      action: 'invoice.paid',
+      tenantId: TENANT_A,
+      actor: ada,
+      context: 'standard',
+      target: { type: 'invoice', id: 'i_1' },
+    });
+    const [row] = await t.query(
+      'select prev_hash, row_hash, content_hash, content_salt, erasure_hash from audit_events',
+    );
+    expect(row).toEqual({
+      prev_hash: null,
+      row_hash: null,
+      content_hash: null,
+      content_salt: null,
+      erasure_hash: null,
+    });
+  });
+
+  it('chains rows in write order, and the run verifies', async () => {
+    for (let i = 0; i < 3; i++) {
+      await chainedLedger.sign(t.db, {
+        action: 'invoice.paid',
+        tenantId: TENANT_A,
+        actor: ada,
+        context: 'standard',
+        target: { type: 'invoice', id: `i_${i}` },
+      });
+    }
+    const rows = await chainedLedger.exportRows(t.db, TENANT_A);
+    expect(rows).toHaveLength(3);
+    expect(rows[0]?.prevHash).toBeNull();
+    expect(rows[1]?.prevHash).toBe(rows[0]?.rowHash);
+    expect(rows[2]?.prevHash).toBe(rows[1]?.rowHash);
+    expect(await verifyChain(rows)).toEqual({ ok: true });
+  });
+
+  it('chains onto the tail correctly under concurrent sign() calls', async () => {
+    await Promise.all(
+      Array.from({ length: 5 }, (_, i) =>
+        chainedLedger.sign(t.db, {
+          action: 'invoice.paid',
+          tenantId: TENANT_A,
+          actor: ada,
+          context: 'standard',
+          target: { type: 'invoice', id: `c_${i}` },
+        }),
+      ),
+    );
+    const rows = await chainedLedger.exportRows(t.db, TENANT_A);
+    expect(rows).toHaveLength(5);
+    // A single linked list, not a fork: walk from the one row with no
+    // predecessor, following row_hash -> prev_hash, and every row must be
+    // visited exactly once. A fork (two rows racing onto the same tail)
+    // would leave some row_hash pointed to twice and some row unreached.
+    const byPrevHash = new Map(rows.map((r) => [r.prevHash, r]));
+    let current = byPrevHash.get(null);
+    const visited = new Set<number>();
+    while (current) {
+      expect(visited.has(current.id)).toBe(false);
+      visited.add(current.id);
+      current = byPrevHash.get(current.rowHash);
+    }
+    expect(visited.size).toBe(5);
+    expect(await verifyChain(rows)).toEqual({ ok: true });
+  });
+
+  it('the first chained row after an unchained one still chains from null, not a stale hash', async () => {
+    await ledger.sign(t.db, {
+      action: 'invoice.paid',
+      tenantId: TENANT_A,
+      actor: ada,
+      context: 'standard',
+      target: { type: 'invoice', id: 'unchained' },
+    });
+    await chainedLedger.sign(t.db, {
+      action: 'invoice.paid',
+      tenantId: TENANT_A,
+      actor: ada,
+      context: 'standard',
+      target: { type: 'invoice', id: 'first_chained' },
+    });
+    const rows = await chainedLedger.exportRows(t.db, TENANT_A);
+    expect(rows.map((r) => r.targetId)).toEqual(['unchained', 'first_chained']);
+    expect(rows[0]?.rowHash).toBeNull();
+    expect(rows[1]?.prevHash).toBeNull();
+    expect(rows[1]?.rowHash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("erase() chain-seals the rows it erases, self-healing any earlier call's subject too, and the run keeps verifying", async () => {
+    await chainedLedger.sign(t.db, {
+      action: 'invoice.paid',
+      tenantId: TENANT_A,
+      actor: ada,
+      context: 'standard',
+      target: { type: 'invoice', id: 'own' },
+      after: { by: 'ada' },
+    });
+    await chainedLedger.sign(t.db, {
+      action: 'invoice.paid',
+      tenantId: TENANT_A,
+      actor: ops,
+      context: 'standard',
+      target: { type: 'invoice', id: 'unrelated' },
+      after: { by: 'ops' },
+    });
+    await chainedLedger.erase(t.db, { subject: 'user_ada', pseudonym: 'Erased person 7' });
+    const rows = await chainedLedger.exportRows(t.db, TENANT_A);
+    const [own, unrelated] = rows;
+    expect(own?.erasedAt).not.toBeNull();
+    expect(own?.contentSalt).toBeNull();
+    expect(own?.erasureHash).toMatch(/^[0-9a-f]{64}$/);
+    // row_hash itself never changes: the guard still refuses it, chained or not.
+    expect(unrelated?.erasedAt).toBeNull();
+    expect(unrelated?.contentSalt).toMatch(/^[0-9a-f]{32}$/);
+    expect(await verifyChain(rows)).toEqual({ ok: true });
   });
 });
