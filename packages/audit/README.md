@@ -122,6 +122,23 @@ await ledger.sign(tx, { ...input, extra: { teamId } });
 key the table does not declare. The host's own migration adds the column; the
 package's migration never learns of it.
 
+## To a customer's SIEM
+
+`toCef(row)` renders one ledger row as a CEF (Common Event Format) line, the
+format Splunk, QRadar, Sentinel and ArcSight ingest directly or over syslog;
+`toCefLines(rows)` does a page of them, one per line.
+
+```ts
+import { toCef, toCefLines } from '@wtfalch/audit';
+
+const { items } = await ledger.page(db, { tenantId, limit: 500 });
+const body = toCefLines(items, { vendor: 'Acme', product: 'Acme', version: '2.3' });
+```
+
+The push half (a webhook, a syslog socket, a file a shipper tails) is the
+host's: which transport, whose endpoint, whose credentials and whose retry
+policy are one decision per enterprise customer, not the package's.
+
 ## Tests
 
 ```sh
