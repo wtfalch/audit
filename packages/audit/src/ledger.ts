@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, lt, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, like, lt, lte, or, sql } from 'drizzle-orm';
 import type { PgDatabase, PgQueryResultHKT } from 'drizzle-orm/pg-core';
 import { type AuditRow, rowSchema } from './schema.js';
 import { type AuditEventRow, type AuditTable, auditEvents as auditEvents_ } from './tables.js';
@@ -66,7 +66,19 @@ export interface PageOptions {
   readonly actorId?: string;
   readonly subjectId?: string;
   readonly action?: string;
+  /**
+   * Rows whose action starts with this prefix, e.g. `'membership.'` for
+   * every membership event. Combine with `action` only if you mean both to
+   * apply at once; almost always you want one or the other, not both. `%`
+   * and `_` are escaped, so they match themselves rather than acting as SQL
+   * wildcards.
+   */
+  readonly actionPrefix?: string;
   readonly requestId?: string;
+  /** Rows at or after this instant. */
+  readonly occurredFrom?: Date;
+  /** Rows at or before this instant. */
+  readonly occurredTo?: Date;
   readonly after?: { readonly occurredAt: Date; readonly id: number };
   readonly limit?: number;
 }
@@ -245,7 +257,13 @@ export function createLedger(options: LedgerOptions): Ledger {
     if (options.actorId) conditions.push(eq(auditEvents.actorId, options.actorId));
     if (options.subjectId) conditions.push(eq(auditEvents.subjectId, options.subjectId));
     if (options.action) conditions.push(eq(auditEvents.action, options.action));
+    if (options.actionPrefix) {
+      const escaped = options.actionPrefix.replace(/[\\%_]/g, (c) => `\\${c}`);
+      conditions.push(like(auditEvents.action, `${escaped}%`));
+    }
     if (options.requestId) conditions.push(eq(auditEvents.requestId, options.requestId));
+    if (options.occurredFrom) conditions.push(gte(auditEvents.occurredAt, options.occurredFrom));
+    if (options.occurredTo) conditions.push(lte(auditEvents.occurredAt, options.occurredTo));
     if (options.after) {
       const { occurredAt, id } = options.after;
       const keyset = or(

@@ -15,6 +15,10 @@
   `ledger.page()`'s keyset cursor. The reader every stamped app was
   hand-rolling from raw rows. `react`, `react-dom` and `@wtfalch/design` are
   optional peers; nothing else in the package needs them.
+- `page()`: `actionPrefix` (`'membership.'` for every membership event) and
+  `occurredFrom`/`occurredTo`, an inclusive range on `occurred_at`. An
+  operator investigation no longer has to bypass the package for raw SQL to
+  get either.
 
 ## 0.4.0 — 2026-09-20
 
