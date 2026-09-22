@@ -55,6 +55,14 @@ export const AUDIT_COLUMNS = {
   schemaVersion: smallint('schema_version').notNull().default(1),
   subjectClass: text('subject_class'),
   subjectId: text('subject_id'),
+  // The hash chain, opt in (LedgerOptions.hashChain). Null on every row a
+  // ledger with chaining off ever writes, and forever on a row written
+  // before 0.5.0 -- see chain.ts and migrations/0004_chain.sql.
+  prevHash: text('prev_hash'),
+  rowHash: text('row_hash'),
+  contentHash: text('content_hash'),
+  contentSalt: text('content_salt'),
+  erasureHash: text('erasure_hash'),
 };
 
 /** The indexes every ledger table carries, for a host declaring its own table over `AUDIT_COLUMNS`. */
@@ -69,6 +77,11 @@ export function auditIndexes(t: { [K in keyof typeof AUDIT_COLUMNS]: ExtraConfig
     index('audit_events_request_idx')
       .on(t.requestId, t.occurredAt.desc())
       .where(sql`${t.requestId} is not null`),
+    index('audit_events_chain_pending_idx')
+      .on(t.id)
+      .where(
+        sql`${t.rowHash} is not null and ${t.erasedAt} is not null and ${t.erasureHash} is null`,
+      ),
   ];
 }
 

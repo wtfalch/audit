@@ -36,6 +36,11 @@ function row(over: Partial<AuditEventRow> = {}): AuditEventRow {
     schemaVersion: 1,
     subjectClass: null,
     subjectId: null,
+    prevHash: null,
+    rowHash: null,
+    contentHash: null,
+    contentSalt: null,
+    erasureHash: null,
     ...over,
   };
 }
