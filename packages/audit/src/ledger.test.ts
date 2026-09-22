@@ -412,6 +412,28 @@ describe('erase', () => {
     expect(await ledger.erase(t.db, { subject: 'user_ada', pseudonym: 'x' })).toBe(0);
   });
 
+  it('matches a payload email regardless of case on either side', async () => {
+    // 0002_display.sql's audit_erase_person also dropped the lower() fold, so
+    // a differently-cased email survived erasure. "about" and "mentions" match
+    // only by their payload email ('Ada@Example.com' / 'ada@example.com');
+    // neither row's actor_id or subject_id is "nobody". Looking the email up
+    // with yet another case on both sides must still find both.
+    const touched = await ledger.erase(t.db, {
+      subject: 'nobody',
+      pseudonym: 'Erased person 7',
+      email: 'ADA@Example.COM',
+    });
+    expect(touched).toBe(2);
+    const rows = await t.query(
+      "select target_id, erased_at is not null as erased from audit_events where target_id in ('about', 'mentions', 'unrelated') order by target_id",
+    );
+    expect(rows).toEqual([
+      { target_id: 'about', erased: true },
+      { target_id: 'mentions', erased: true },
+      { target_id: 'unrelated', erased: false },
+    ]);
+  });
+
   it('refuses an empty subject or pseudonym', async () => {
     await expect(ledger.erase(t.db, { subject: '', pseudonym: 'x' })).rejects.toThrow(
       /subject id is required/,
@@ -419,6 +441,37 @@ describe('erase', () => {
     await expect(ledger.erase(t.db, { subject: 'user_ada', pseudonym: '' })).rejects.toThrow(
       /pseudonym/,
     );
+  });
+
+  it('refuses an empty email', async () => {
+    await expect(
+      ledger.erase(t.db, { subject: 'user_ada', pseudonym: 'x', email: '' }),
+    ).rejects.toThrow(/empty email/);
+    // Nothing touched: the guard fires before the SQL function runs.
+    const rows = await t.query('select erased_at is not null as erased from audit_events');
+    expect(rows.every((r) => r.erased === false)).toBe(true);
+  });
+
+  it("an empty subject_email at the SQL function touches only the subject's own rows, not every tenant's payloads", async () => {
+    // 0002_display.sql's audit_erase_person dropped the `length() > 0` guard,
+    // so an empty string became a `like '%%'` match against every row's
+    // before/after text -- regardless of subject. Calling the function
+    // directly (below the ledger.erase() guard added above) proves the fix
+    // in migrations/0003_erase_email_guard.sql holds at the database level
+    // too: an empty subject_email matches by actor_id/subject_id only.
+    const touched = await t.query(
+      "select audit_erase_person('user_ada', 'Erased person 7', '') as n",
+    );
+    expect(Number(touched[0]?.n)).toBe(2);
+    const rows = await t.query(
+      'select target_id, erased_at is not null as erased from audit_events order by id',
+    );
+    expect(rows).toEqual([
+      { target_id: 'own', erased: true }, // actor_id = subject
+      { target_id: 'about', erased: true }, // subject_id = subject
+      { target_id: 'mentions', erased: false }, // only the email in the payload names them
+      { target_id: 'unrelated', erased: false }, // no match at all
+    ]);
   });
 });
 
