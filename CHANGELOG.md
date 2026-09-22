@@ -45,6 +45,8 @@
   pending erasures through two security definer functions added in 0005, so
   a tenant scope cannot fork the chain or hide pending erasures. **Apply 0005
   before deploying this version** if `hashChain` is on.
+- README: a ledger for a service with no tenant database (own vocabulary,
+  `tenantId: null`, its own Postgres), with a test that runs that shape.
 
 ## 0.4.0 — 2026-09-20
 
