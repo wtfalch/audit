@@ -4,8 +4,11 @@ import { defineConfig } from 'vitest/config';
 // one at a time; on PGlite every file has a database of its own.
 export default defineConfig({
   test: {
-    include: ['src/**/*.test.ts'],
+    include: ['src/**/*.test.{ts,tsx}'],
     fileParallelism: !process.env.TEST_DATABASE_URL,
     testTimeout: 30_000,
+    // The design package's ESM imports are extensionless, which a bundler
+    // resolves and bare Node does not; let Vite process it.
+    server: { deps: { inline: ['@wtfalch/design'] } },
   },
 });

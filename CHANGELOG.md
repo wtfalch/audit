@@ -10,6 +10,11 @@
   `audit-migrations` as usual.
 - `ledger.erase()` now refuses an empty `email` outright, instead of passing
   it through to the SQL function.
+- `./react`: `SecurityLog`, rows for a tenant's or an operator's security log
+  on `ActivityLine` (`@wtfalch/design`), with a "Load more" over
+  `ledger.page()`'s keyset cursor. The reader every stamped app was
+  hand-rolling from raw rows. `react`, `react-dom` and `@wtfalch/design` are
+  optional peers; nothing else in the package needs them.
 
 ## 0.4.0 — 2026-09-20
 
