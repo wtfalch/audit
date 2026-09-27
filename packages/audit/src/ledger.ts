@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, gte, like, lt, lte, or, sql } from 'drizzle-orm';
 import type { PgDatabase, PgQueryResultHKT } from 'drizzle-orm/pg-core';
 import { computeErasureHash, sealRow } from './chain.js';
+import { assertRuntimeRole } from './runtime-role-guard.js';
 import { type AuditRow, rowSchema } from './schema.js';
 import { resultRows } from './sql-result.js';
 import { type AuditEventRow, type AuditTable, auditEvents as auditEvents_ } from './tables.js';
@@ -165,6 +166,24 @@ export interface LedgerOptions {
    * verified.
    */
   readonly hashChain?: boolean;
+  /**
+   * Fails closed, once, the first time this ledger is asked to use a
+   * connection, if that connection's role can bypass row-level security or
+   * still holds UPDATE/DELETE/TRUNCATE on the table -- see
+   * `assertRuntimeRole` in `runtime-role-guard.ts`. On by default.
+   *
+   * `createLedger` itself takes no handle -- most hosts build the ledger
+   * once at module scope, before any connection exists at all, and pass a
+   * handle only per call (`sign(handle, ...)`, `page(handle, ...)`, …) -- so
+   * the earliest real point to check the connection it is actually given is
+   * the first call that hands one over, not construction; every later call
+   * on the same handle reuses that first check rather than repeating it.
+   * Set this to `false` for a connection that is deliberately broader than
+   * `<database>_rt` -- a test against a superuser fixture (PGlite's own
+   * connection is one), or a host that already runs `assertRuntimeRole`
+   * itself and does not want it run twice.
+   */
+  readonly checkRuntimeRole?: boolean;
 }
 
 export interface Ledger {
@@ -219,10 +238,27 @@ export function createLedger(options: LedgerOptions): Ledger {
     table: auditEvents = auditEvents_,
     schemaVersion = 1,
     hashChain = false,
+    checkRuntimeRole = true,
   } = options;
   const schema = rowSchema(vocabulary, { schemaVersion });
 
+  // Keyed on the handle itself, not a global: two ledgers over two
+  // different handles (or a test's fake and a host's real one) never share
+  // a verdict, and the check runs once per handle rather than once per
+  // call. See `LedgerOptions.checkRuntimeRole`.
+  const roleChecks = new WeakMap<Handle, Promise<void>>();
+  function ensureRuntimeRoleChecked(handle: Handle): Promise<void> {
+    if (!checkRuntimeRole) return Promise.resolve();
+    let checked = roleChecks.get(handle);
+    if (!checked) {
+      checked = assertRuntimeRole(handle, auditEvents);
+      roleChecks.set(handle, checked);
+    }
+    return checked;
+  }
+
   async function sign(handle: Handle, input: SignInput): Promise<void> {
+    await ensureRuntimeRoleChecked(handle);
     const meta = vocabulary.events[input.action];
     if (!meta) {
       throw new Error(`audit: "${input.action}" is not an event this ledger's vocabulary declares`);
@@ -324,6 +360,7 @@ export function createLedger(options: LedgerOptions): Ledger {
   }
 
   async function page(handle: Handle, options: PageOptions = {}): Promise<Page> {
+    await ensureRuntimeRoleChecked(handle);
     const limit = Math.max(1, Math.min(options.limit ?? 50, 200));
     const conditions = [];
     if (options.tenantId === null) conditions.push(sql`${auditEvents.tenantId} is null`);
@@ -363,6 +400,7 @@ export function createLedger(options: LedgerOptions): Ledger {
   }
 
   async function erase(handle: Handle, input: EraseInput): Promise<number> {
+    await ensureRuntimeRoleChecked(handle);
     if (input.email === '') {
       throw new Error(
         'audit: erase: an empty email matches every row; omit email or pass the address',
@@ -401,6 +439,7 @@ export function createLedger(options: LedgerOptions): Ledger {
   }
 
   async function exportRows(handle: Handle, tenantId: string): Promise<readonly AuditEventRow[]> {
+    await ensureRuntimeRoleChecked(handle);
     return handle
       .select()
       .from(auditEvents)

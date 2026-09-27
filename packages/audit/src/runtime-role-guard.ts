@@ -15,13 +15,13 @@ import { type AuditTable, auditEvents as auditEvents_ } from './tables.js';
  * owner gets no RLS at all" names the exact failure this closes for real,
  * at startup, instead of leaving it to be discovered later.
  *
- * This is an opt-in check, not something `createLedger` calls for a host:
- * the package validates the shape and the vocabulary of what it is given
- * and asks no permission of its own (README's "the package checks no
- * permission" scope), and a query on every `createLedger()` construction is
- * a cost every host would pay whether or not it wants this particular
- * guarantee checked in-process. A host wires it into its own boot path,
- * mirroring `@wtfalch/tasks`'s `apps/host/src/lib/runtime-role-guard.ts`.
+ * `createLedger` (`ledger.ts`) calls this itself, once per handle it is
+ * given, before `sign`/`page`/`erase`/`exportRows` touch the table --
+ * `LedgerOptions.checkRuntimeRole` (on by default) is the switch. It stays
+ * exported too, for a host that wants to fail closed before `createLedger`
+ * is even reachable (its own boot path, mirroring `@wtfalch/tasks`'s
+ * `apps/host/src/lib/runtime-role-guard.ts`), or that checks a handle this
+ * package's ledger never sees.
  */
 export class UnsafeRuntimeRoleError extends Error {
   constructor(message: string) {

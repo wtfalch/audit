@@ -20,7 +20,9 @@ const vocabulary = ledgerVocabulary({
   contexts: ['operator'],
   outcomes: ['success', 'refused', 'failed'],
 });
-const ledger = createLedger({ vocabulary, hashChain: true });
+// t.db connects as the table's own owner (see ledger.test.ts's comment);
+// this suite tests ledger behaviour, not assertRuntimeRole.
+const ledger = createLedger({ vocabulary, hashChain: true, checkRuntimeRole: false });
 const william = { class: 'human', id: 'william', display: 'William' };
 
 beforeAll(async () => {
