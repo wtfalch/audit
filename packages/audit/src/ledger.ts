@@ -2,6 +2,7 @@ import { and, asc, desc, eq, gte, like, lt, lte, or, sql } from 'drizzle-orm';
 import type { PgDatabase, PgQueryResultHKT } from 'drizzle-orm/pg-core';
 import { computeErasureHash, sealRow } from './chain.js';
 import { type AuditRow, rowSchema } from './schema.js';
+import { resultRows } from './sql-result.js';
 import { type AuditEventRow, type AuditTable, auditEvents as auditEvents_ } from './tables.js';
 import type { LedgerVocabulary } from './vocabulary.js';
 
@@ -193,11 +194,6 @@ const LEDGER_KEYS = new Set(Object.keys(auditEvents_));
 // from the name at call time rather than a hard-coded number, so the name
 // is what a reader checks, not an opaque bigint.
 const CHAIN_LOCK_NAME = 'wtfalch/audit chain';
-
-/** `execute()`'s rows: postgres-js returns an array, PGlite an object holding one. */
-function resultRows<T>(result: unknown): T[] {
-  return Array.isArray(result) ? (result as T[]) : ((result as { rows?: T[] }).rows ?? []);
-}
 
 /**
  * Scopes every read of `audit_events` on `tx` to one tenant, for the rest of
