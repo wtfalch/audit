@@ -27,8 +27,8 @@ importers:
         specifier: ^19
         version: 19.3.0(@types/react@19.3.0)
       '@wtfalch/design':
-        specifier: ^0.23.0
-        version: 0.23.0(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(zod@4.6.2)
+        specifier: 0.28.0
+        version: 0.28.0(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(zod@4.6.2)
       drizzle-orm:
         specifier: ^0.39.3
         version: 0.39.3(@electric-sql/pglite@0.5.8)(postgres@3.4.9)
@@ -358,8 +358,8 @@ packages:
   '@vitest/utils@4.1.11':
     resolution: {integrity: sha512-zTCVGpyFsGWBhllOyKlTw/vnr6D9qxsfSDyfbyZmTyjHw5N/VuvzHpHoQjm2ZJzn4RJgx5w4r7V0er69CmLgPQ==}
 
-  '@wtfalch/design@0.23.0':
-    resolution: {integrity: sha512-EVaQQZ8xFGPNLEOpK06SHOGDxeSwrgkNYT27n2WxwmblUYsfmaikZLaOgfzb1OH29biKeYVPXDy9K7kvPnZN7w==}
+  '@wtfalch/design@0.28.0':
+    resolution: {integrity: sha512-70eJe916U2hUjDs6uEdlqde2tgqY1L1HCxVzysgb06eTCngwlz3ZpuW69FF1ecWQ46vocA15qOFDR0feDbK5+Q==}
     engines: {node: '>=22.0.0'}
     peerDependencies:
       '@tiptap/extension-link': ^3.31.0
@@ -369,6 +369,8 @@ packages:
       '@tiptap/starter-kit': ^3.31.0
       react: ^19.0.0
       react-dom: ^19.0.0
+      react-hook-form: ^7.0.0
+      sharp: '>=0.33.0 <1.0.0'
       zod: ^4.0.0
     peerDependenciesMeta:
       '@tiptap/extension-link':
@@ -380,6 +382,10 @@ packages:
       '@tiptap/react':
         optional: true
       '@tiptap/starter-kit':
+        optional: true
+      react-hook-form:
+        optional: true
+      sharp:
         optional: true
       zod:
         optional: true
@@ -1138,8 +1144,9 @@ snapshots:
       convert-source-map: 2.0.0
       tinyrainbow: 3.1.1
 
-  '@wtfalch/design@0.23.0(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(zod@4.6.2)':
+  '@wtfalch/design@0.28.0(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(zod@4.6.2)':
     dependencies:
+      '@internationalized/date': 3.12.4
       '@radix-ui/react-slot': 1.3.3(@types/react@19.3.0)(react@19.3.0)
       dompurify: 3.4.15
       marked: 18.0.14
