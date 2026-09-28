@@ -26,6 +26,9 @@ importers:
       '@types/react-dom':
         specifier: ^19
         version: 19.3.0(@types/react@19.3.0)
+      '@wtfalch/contracts':
+        specifier: 0.2.0
+        version: 0.2.0
       '@wtfalch/design':
         specifier: ^0.23.0
         version: 0.23.0(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(zod@4.6.2)
@@ -357,6 +360,10 @@ packages:
 
   '@vitest/utils@4.1.11':
     resolution: {integrity: sha512-zTCVGpyFsGWBhllOyKlTw/vnr6D9qxsfSDyfbyZmTyjHw5N/VuvzHpHoQjm2ZJzn4RJgx5w4r7V0er69CmLgPQ==}
+
+  '@wtfalch/contracts@0.2.0':
+    resolution: {integrity: sha512-LIcdVxh8eM3FJMCBydTeOIDqNPk8TC/nxvpr/0pHYiVxFDHMatlinoFJ+vaf/tW0J/z7zB1vu+U8okOPPQRzEQ==}
+    engines: {node: '>=22.0.0'}
 
   '@wtfalch/design@0.23.0':
     resolution: {integrity: sha512-EVaQQZ8xFGPNLEOpK06SHOGDxeSwrgkNYT27n2WxwmblUYsfmaikZLaOgfzb1OH29biKeYVPXDy9K7kvPnZN7w==}
@@ -1137,6 +1144,8 @@ snapshots:
       '@vitest/pretty-format': 4.1.11
       convert-source-map: 2.0.0
       tinyrainbow: 3.1.1
+
+  '@wtfalch/contracts@0.2.0': {}
 
   '@wtfalch/design@0.23.0(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(zod@4.6.2)':
     dependencies:

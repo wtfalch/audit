@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.6.0 — 2026-09-28
+
+- `ledgerReadHandler`: a fetch-shaped handler for `GET /v1/audit?tenant=&
+  cursor=&limit=`, returning a tenant's `tenantVisible` rows as
+  `LedgerReadRow` (a deliberate subset of the full row), paged with the
+  estate's `cursor`/`limit`/`nextCursor` convention
+  (`@wtfalch/contracts` ADR 0008; an invalid or expired cursor answers
+  `conflict`). Authentication is a port, `authorize(request) => { tenantId }
+  | null`, not a dependency -- the host wires it from
+  `@wtfalch/keys/issued`'s `check()`; this package imports nothing from
+  `keys`. A request whose credential's tenant differs from the `tenant`
+  parameter is refused (`forbidden`). See README, "Reading across apps".
+- `fetchLedgerPage`/`fetchMergedLedgerPage`: a small client, for a host like
+  Boule that fans out to several apps' `ledgerReadHandler` and merges their
+  pages by `occurredAt`, one source's failure never blanking the rest.
+- `@wtfalch/contracts` joins the optional peers, for `ServiceError` and the
+  `PageCursor` type the handler and client both use. `ADR 0001` records why
+  this stays a port for authentication but a real (optional) dependency for
+  the wire contract.
+
 ## 0.5.0 — 2026-09-23
 
 - Fix: `audit_erase_person` lost its empty-email guard and its lower-casing

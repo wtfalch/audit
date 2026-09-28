@@ -9,6 +9,10 @@ once inside its trusted base, keeps the signer there, and hands each module
 that wants auditing a writer already bound to the actor the base resolved
 and the event names that module may use. The guarantee that a row's actor is
 real is the host's, and it holds only while the signer stays private.
+`ledgerReadHandler` (below, "Reading across apps") does not change this: it
+is a plain function a host mounts on its own HTTP layer, never a server this
+package runs, and it only ever reads through `ledger.page()` -- the signer
+still never leaves the host that built it.
 
 ## What the package enforces, and what the host does
 
@@ -227,6 +231,83 @@ await assertRuntimeRole(db); // throws if the connection is not the `_rt` role, 
 With `hashChain` on, `sign()` and `erase()` now read the chain tail and the
 pending erasures through `audit_chain_tail()` and `audit_pending_erasures()`,
 both added in 0005. Apply 0005 before deploying this version.
+
+## Reading across apps
+
+The ledger stays per app (see "A service with no tenant database" and
+"Tenant isolation in the database" above) -- there is no shared store this
+section reaches into. What it adds is a read contract a host mounts, so a
+company-facing app like Boule can fan out to every app a company uses and
+show one merged security log, without any app's signer leaving its own
+trusted base. See [ADR 0001](../../docs/adr/0001-ledger-read-handler.md)
+for the reasoning behind this shape.
+
+### The handler
+
+```ts
+import { ledgerReadHandler } from '@wtfalch/audit';
+
+const handler = ledgerReadHandler({ ledger, handle: db, authorize });
+// Next.js: export const GET = (request) => handler(request);
+```
+
+`GET /v1/audit?tenant=<id>&cursor=&limit=` answers only that tenant's
+`tenantVisible` rows, as `LedgerReadRow` (a deliberate subset of the full
+row -- no `before`/`after`, no request metadata, no hash-chain internals;
+see the ADR), paged with the estate's convention: `cursor`/`limit` in,
+`nextCursor` out (`@wtfalch/contracts` ADR 0008). A `cursor` that fails to
+decode answers `conflict` (409) -- restart from the first page.
+
+### `authorize`: a port, not a dependency
+
+`authorize(request) => { tenantId } | null` is the whole contract. This
+package imports nothing from `@wtfalch/keys` -- a host wires it from
+`@wtfalch/keys/issued`'s `check()`, reading `tenantId` off whichever grant
+shape that host's own issuer uses:
+
+```ts
+import type { Authorize } from '@wtfalch/audit';
+
+// issuer: CredentialIssuer<{ tenantId: string; scope: 'audit:read' }>
+// from createCredentialIssuer (@wtfalch/keys/issued), built once at module
+// scope inside this app's own trusted base.
+const authorize: Authorize = async (request) => {
+  const header = request.headers.get('authorization');
+  const secret = header?.startsWith('Bearer ') ? header.slice(7) : null;
+  if (!secret) return null;
+  const result = await issuer.check(secret);
+  if (!result.ok) return null;
+  const grant = result.grants.find((g) => g.scope === 'audit:read');
+  return grant ? { tenantId: grant.tenantId } : null;
+};
+```
+
+A request whose credential resolves to a different tenant than the
+`tenant` query parameter is refused (`forbidden`), never silently
+substituted -- Boule fans out with one credential per tenant per app, not
+one credential that can read every tenant.
+
+### The client
+
+```ts
+import { fetchMergedLedgerPage } from '@wtfalch/audit';
+
+const page = await fetchMergedLedgerPage({
+  tenant: tenantId,
+  sources: [
+    { name: 'files', baseUrl: 'https://files.example.com', credential: filesKey },
+    { name: 'ai', baseUrl: 'https://ai.example.com', credential: aiKey },
+  ],
+});
+// page.items: MergedLedgerRow[], newest first, each carrying `source`.
+// page.nextCursors: { files: '...' | null, ai: '...' | null } — pass back
+// as `cursors` on the next call to page every source forward together.
+// page.errors: { [sourceName]: message } for a source that failed this round.
+```
+
+There is no single cursor across sources -- each keeps its own keyset
+position -- and one source failing does not fail the call; it is just
+missing from that round and named in `errors`.
 
 ## To a customer's SIEM
 
