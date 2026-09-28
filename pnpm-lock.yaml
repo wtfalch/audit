@@ -26,6 +26,12 @@ importers:
       '@types/react-dom':
         specifier: ^19
         version: 19.3.0(@types/react@19.3.0)
+      '@wtfalch/authz':
+        specifier: 0.16.0
+        version: 0.16.0(zod@4.6.2)
+      '@wtfalch/contracts':
+        specifier: 0.2.0
+        version: 0.2.0
       '@wtfalch/design':
         specifier: 0.28.0
         version: 0.28.0(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(zod@4.6.2)
@@ -357,6 +363,16 @@ packages:
 
   '@vitest/utils@4.1.11':
     resolution: {integrity: sha512-zTCVGpyFsGWBhllOyKlTw/vnr6D9qxsfSDyfbyZmTyjHw5N/VuvzHpHoQjm2ZJzn4RJgx5w4r7V0er69CmLgPQ==}
+
+  '@wtfalch/authz@0.16.0':
+    resolution: {integrity: sha512-bhVqm/uCe2WeFonc9cxgaL3H1DG+bn8wXZPttmXXVp3aD5Yf+jW3l00YiS4DFTgwPGbS2h0sChEecCY336+XRQ==}
+    engines: {node: '>=22.0.0'}
+    peerDependencies:
+      zod: ^4.1.13
+
+  '@wtfalch/contracts@0.2.0':
+    resolution: {integrity: sha512-LIcdVxh8eM3FJMCBydTeOIDqNPk8TC/nxvpr/0pHYiVxFDHMatlinoFJ+vaf/tW0J/z7zB1vu+U8okOPPQRzEQ==}
+    engines: {node: '>=22.0.0'}
 
   '@wtfalch/design@0.28.0':
     resolution: {integrity: sha512-70eJe916U2hUjDs6uEdlqde2tgqY1L1HCxVzysgb06eTCngwlz3ZpuW69FF1ecWQ46vocA15qOFDR0feDbK5+Q==}
@@ -1143,6 +1159,12 @@ snapshots:
       '@vitest/pretty-format': 4.1.11
       convert-source-map: 2.0.0
       tinyrainbow: 3.1.1
+
+  '@wtfalch/authz@0.16.0(zod@4.6.2)':
+    dependencies:
+      zod: 4.6.2
+
+  '@wtfalch/contracts@0.2.0': {}
 
   '@wtfalch/design@0.28.0(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(zod@4.6.2)':
     dependencies:

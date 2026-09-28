@@ -9,6 +9,10 @@ once inside its trusted base, keeps the signer there, and hands each module
 that wants auditing a writer already bound to the actor the base resolved
 and the event names that module may use. The guarantee that a row's actor is
 real is the host's, and it holds only while the signer stays private.
+`ledgerReadHandler` (below, "Reading across apps") does not change this: it
+is a plain function a host mounts on its own HTTP layer, never a server this
+package runs, and it only ever reads through `ledger.page()` -- the signer
+still never leaves the host that built it.
 
 ## What the package enforces, and what the host does
 
@@ -59,8 +63,10 @@ await db.transaction(async (tx) => {
   });
 });
 
-// Readers. The host gates; a tenant-facing page always passes tenantVisibleOnly.
-const page = await ledger.page(db, { tenantId, tenantVisibleOnly: true, limit: 50 });
+// Readers. `page()` refuses unless `access` allows `audit:read` on `resource`;
+// a tenant-facing page also always passes tenantVisibleOnly.
+const resource = { type: 'audit.event', id: tenantId, organisationId: tenantId, teamId: null, applicationId, platformId };
+const page = await ledger.page(db, { access, resource, tenantId, tenantVisibleOnly: true, limit: 50 });
 const rows = await ledger.exportRows(db, tenantId);
 
 // Erasure, inside the host's own erasure transaction.
@@ -153,16 +159,19 @@ The database is the one thing the package cannot supply.
 
 ## Tenant isolation in the database
 
-`migrations/0005_rls.sql` turns on row-level security. For every role but the
-table's owner, a read inside a tenant-scoped transaction sees that tenant's
-rows and nothing else, whatever predicate the query forgot:
+`migrations/0005_rls.sql` turns on row-level security, and
+`migrations/0006_force_rls.sql` forces it: a read inside a tenant-scoped
+transaction sees that tenant's rows and nothing else, whatever predicate the
+query forgot, for every role -- including the table's owner, not just
+`<database>_rt`. Only an actual Postgres superuser bypasses RLS regardless of
+FORCE, and a host's runtime connection should never be one.
 
 ```ts
 import { scopeAuditTenant } from '@wtfalch/audit';
 
 await db.transaction(async (tx) => {
   await scopeAuditTenant(tx, tenantId); // set_config('audit.tenant_id', ..., true)
-  const page = await ledger.page(tx, { tenantId, tenantVisibleOnly: true });
+  const page = await ledger.page(tx, { access, resource, tenantId, tenantVisibleOnly: true });
 });
 ```
 
@@ -175,8 +184,7 @@ alter role <database>_rt set audit.require_tenant = 'on';
 ```
 
 An operator surface that reads across tenants then connects as another role.
-Which role that is belongs to the host. An app that connects as the table's
-owner gets no RLS at all.
+Which role that is belongs to the host.
 
 Neither that nor the append-only revoke above was enforced at runtime by
 this package before `assertRuntimeRole`: both depend on the connection
@@ -228,6 +236,94 @@ With `hashChain` on, `sign()` and `erase()` now read the chain tail and the
 pending erasures through `audit_chain_tail()` and `audit_pending_erasures()`,
 both added in 0005. Apply 0005 before deploying this version.
 
+## Reading across apps
+
+The ledger stays per app (see "A service with no tenant database" and
+"Tenant isolation in the database" above) -- there is no shared store this
+section reaches into. What it adds is a read contract a host mounts, so a
+company-facing app like Boule can fan out to every app a company uses and
+show one merged security log, without any app's signer leaving its own
+trusted base. See [ADR 0001](../../docs/adr/0001-ledger-read-handler.md)
+for the reasoning behind this shape.
+
+### The handler
+
+```ts
+import { ledgerReadHandler } from '@wtfalch/audit';
+
+const handler = ledgerReadHandler({
+  ledger,
+  handle: db,
+  authorize,
+  applicationId: 'files', // this host's own ids, for the AccessResource audit:read is checked against
+  platformId: 'wtfalch',
+});
+// Next.js: export const GET = (request) => handler(request);
+```
+
+`GET /v1/audit?tenant=<id>&cursor=&limit=` answers only that tenant's
+`tenantVisible` rows, as `LedgerReadRow` (a deliberate subset of the full
+row -- no `before`/`after`, no request metadata, no hash-chain internals;
+see the ADR), paged with the estate's convention: `cursor`/`limit` in,
+`nextCursor` out (`@wtfalch/contracts` ADR 0008). A `cursor` that fails to
+decode answers `conflict` (409) -- restart from the first page.
+
+### `authorize`: a port, not a dependency
+
+`authorize(request) => { tenantId, access } | null` is the whole contract.
+This package imports nothing from `@wtfalch/keys` -- a host wires it from
+`@wtfalch/keys/issued`'s `check()`, reading `tenantId` off whichever grant
+shape that host's own issuer uses, and resolves `access` (a
+`@wtfalch/authz` `ResourceAccess`) the same way its other routes already do
+for that credential:
+
+```ts
+import type { Authorize } from '@wtfalch/audit';
+
+// issuer: CredentialIssuer<{ tenantId: string; scope: 'audit:read' }>
+// from createCredentialIssuer (@wtfalch/keys/issued), built once at module
+// scope inside this app's own trusted base.
+const authorize: Authorize = async (request) => {
+  const header = request.headers.get('authorization');
+  const secret = header?.startsWith('Bearer ') ? header.slice(7) : null;
+  if (!secret) return null;
+  const result = await issuer.check(secret);
+  if (!result.ok) return null;
+  const grant = result.grants.find((g) => g.scope === 'audit:read');
+  if (!grant) return null;
+  const access = resourceAccessFor(result); // this host's own resolution, as for any other route
+  return { tenantId: grant.tenantId, access };
+};
+```
+
+A request whose credential resolves to a different tenant than the
+`tenant` query parameter, or whose `access` does not allow `audit:read`, is
+refused (`forbidden`), never silently substituted -- Boule fans out with
+one credential per tenant per app, not one credential that can read every
+tenant.
+
+### The client
+
+```ts
+import { fetchMergedLedgerPage } from '@wtfalch/audit';
+
+const page = await fetchMergedLedgerPage({
+  tenant: tenantId,
+  sources: [
+    { name: 'files', baseUrl: 'https://files.example.com', credential: filesKey },
+    { name: 'ai', baseUrl: 'https://ai.example.com', credential: aiKey },
+  ],
+});
+// page.items: MergedLedgerRow[], newest first, each carrying `source`.
+// page.nextCursors: { files: '...' | null, ai: '...' | null } — pass back
+// as `cursors` on the next call to page every source forward together.
+// page.errors: { [sourceName]: message } for a source that failed this round.
+```
+
+There is no single cursor across sources -- each keeps its own keyset
+position -- and one source failing does not fail the call; it is just
+missing from that round and named in `errors`.
+
 ## To a customer's SIEM
 
 `toCef(row)` renders one ledger row as a CEF (Common Event Format) line, the
@@ -237,7 +333,7 @@ format Splunk, QRadar, Sentinel and ArcSight ingest directly or over syslog;
 ```ts
 import { toCef, toCefLines } from '@wtfalch/audit';
 
-const { items } = await ledger.page(db, { tenantId, limit: 500 });
+const { items } = await ledger.page(db, { access, resource, tenantId, limit: 500 });
 const body = toCefLines(items, { vendor: 'Acme', product: 'Acme', version: '2.3' });
 ```
 
