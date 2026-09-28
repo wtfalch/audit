@@ -15,7 +15,7 @@ real is the host's, and it holds only while the signer stays private.
 | Concern | Where |
 | --- | --- |
 | Column bounds, JSON size, `namespace.name` action shape, subject pair, break-glass shape | `migrations/0001_audit.sql` CHECKs, and `rowSchema` before the insert |
-| Append-only: no DELETE, no TRUNCATE, UPDATE limited to what erasure touches | `audit_events_guard` trigger, plus a revoke from `<database>_rt`; `assertRuntimeRole` checks the revoke actually landed on the connected role |
+| Append-only: no DELETE, no TRUNCATE, UPDATE limited to what erasure touches | `audit_events_guard` trigger, plus a revoke from `<database>_rt`; `createLedger` runs `assertRuntimeRole` on first use to check the revoke actually landed on the connected role |
 | The closed sets: which events, actor classes, contexts, outcomes, reason codes | `LedgerVocabulary` in TypeScript at write time; the host's own CHECKs in the database when it has them |
 | Who may sign what | The host. The package checks no permission and reads no session |
 | Tenant visibility | Decided per event in the vocabulary, never per write |
@@ -178,24 +178,51 @@ An operator surface that reads across tenants then connects as another role.
 Which role that is belongs to the host. An app that connects as the table's
 owner gets no RLS at all.
 
-Neither that nor the append-only revoke above is enforced at runtime by
-this package: both depend on the connection being named exactly
-`<database>_rt`, and no migration can see what role a given deployment's
-connection string will actually resolve to. `assertRuntimeRole(handle)`
-closes that at startup instead of leaving it silent -- it throws
+Neither that nor the append-only revoke above was enforced at runtime by
+this package before `assertRuntimeRole`: both depend on the connection
+being named exactly `<database>_rt`, and no migration can see what role a
+given deployment's connection string will actually resolve to. It throws
 `UnsafeRuntimeRoleError` if the connected role can bypass row-level security
 (superuser or BYPASSRLS) or still holds UPDATE, DELETE or TRUNCATE on
-`audit_events`:
+`audit_events`.
+
+**`createLedger` runs it for you.** The ledger it returns checks the first
+handle any of `sign`/`page`/`erase`/`exportRows` is called with, once, and
+fails closed before that call -- and every one after, on the same handle --
+touches the table if the role is unsafe. This is on by default
+(`LedgerOptions.checkRuntimeRole`); turn it off for a connection that is
+deliberately broader than `<database>_rt`, such as a test run against a
+superuser fixture:
+
+```ts
+const ledger = createLedger({ vocabulary, checkRuntimeRole: false }); // e.g. tests against PGlite's superuser connection
+```
+
+The check is once per handle, on that handle's first use, not once per
+call and not on a timer. A handle a host holds for a long time -- a pooled
+connection, a client built once at module scope -- is checked once for as
+long as the host keeps using that same handle object, which can be the
+whole process lifetime; a role change made afterward (a revoked grant, a
+rotated `<database>_rt`) is not picked up on that handle. To have a role
+change take effect, give the ledger a handle it has not seen before -- pass
+a fresh transaction handle per request, which is the usual shape for a web
+host -- or restart the process. If your own tests run against a superuser
+connection -- PGlite is one, and so is a local Postgres reached as
+`postgres` -- pass `checkRuntimeRole: false` to `createLedger` in those
+tests, the same way this package's own PGlite-backed tests do; the check
+throws on a superuser connection by design.
+
+`assertRuntimeRole` also stays exported, for a host that wants the same
+check on a connection this package's ledger never sees, or that wants to
+fail before `createLedger` is even reachable -- its own boot path, the way
+`@wtfalch/tasks`'s `apps/host/src/lib/runtime-role-guard.ts` does for that
+package's tables:
 
 ```ts
 import { assertRuntimeRole } from '@wtfalch/audit';
 
 await assertRuntimeRole(db); // throws if the connection is not the `_rt` role, or one shaped like it
 ```
-
-It is opt-in, not something `createLedger` calls itself -- a host wires it
-into its own boot path, once, the way `@wtfalch/tasks`'s
-`apps/host/src/lib/runtime-role-guard.ts` does for that package's tables.
 
 With `hashChain` on, `sign()` and `erase()` now read the chain tail and the
 pending erasures through `audit_chain_tail()` and `audit_pending_erasures()`,

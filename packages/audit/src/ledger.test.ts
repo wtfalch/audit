@@ -18,8 +18,13 @@ let chainedLedger: Ledger;
 beforeAll(async () => {
   t = await testDb();
   const vocabulary = ledgerVocabularyFromCore(CORE, { 'invoice.paid': { tenantVisible: true } });
-  ledger = createLedger({ vocabulary });
-  chainedLedger = createLedger({ vocabulary, hashChain: true });
+  // testDb() connects as the table's own owner (PGlite's superuser
+  // connection, or the migration owner over TEST_DATABASE_URL) -- exactly
+  // the roles assertRuntimeRole exists to refuse. Everything here tests
+  // ledger behaviour, not that guard; runtime-role-guard.test.ts and
+  // rls.test.ts's `postgres_rt`-scoped ledgers cover it instead.
+  ledger = createLedger({ vocabulary, checkRuntimeRole: false });
+  chainedLedger = createLedger({ vocabulary, hashChain: true, checkRuntimeRole: false });
 });
 afterAll(async () => {
   await t.close();
@@ -545,6 +550,7 @@ describe("a host's own columns", () => {
     vocabulary: ledgerVocabularyFromCore(CORE),
     table: hostTable,
     schemaVersion: 2,
+    checkRuntimeRole: false, // t.db is the table's owner; see the comment above.
   });
 
   beforeEach(async () => {
