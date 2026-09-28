@@ -7,7 +7,8 @@
     "lint": "biome check .",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
-    "build": "pnpm -r build"
+    "build": "pnpm -r build",
+    "check": "pnpm build && pnpm lint && pnpm typecheck && pnpm test && pnpm --filter @wtfalch/audit exec npm pack --dry-run"
   },
   "devDependencies": {
     "@biomejs/biome": "1.9.4"

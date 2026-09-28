@@ -2,11 +2,12 @@ name: CI
 
 # Publishing is release.yml, on a `v*` tag; this only checks.
 
-# Pull requests only: a squash merge lands the tree the PR run already
-# tested, so a second run on main repeated it. Run it on main by hand with
-# workflow_dispatch.
+# Estate policy: this workflow runs only on a `v*` tag, as the gate before
+# release.yml publishes to npm. The merge gate for a pull request is
+# `pnpm check` run locally against the PR head.
 on:
-  pull_request:
+  push:
+    tags: ['v*']
   workflow_dispatch:
 
 # A newer push to the same PR cancels the run it replaces.
