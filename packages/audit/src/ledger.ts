@@ -172,6 +172,18 @@ export interface LedgerOptions {
    * still holds UPDATE/DELETE/TRUNCATE on the table -- see
    * `assertRuntimeRole` in `runtime-role-guard.ts`. On by default.
    *
+   * The role is checked once per handle, on that handle's first use --
+   * never again on later calls with that same handle, and never on a
+   * schedule. A handle a host keeps for a long time (a pooled connection
+   * object, a module-scope client passed to every request) is therefore
+   * checked once for as long as that object lives, which can be the whole
+   * process lifetime, not re-checked each call and not re-checked when the
+   * role's grants change underneath it. A host that needs a role change
+   * (a revoked grant, a rotated `<database>_rt`) to take effect has to
+   * hand the ledger a handle it has not used before -- a fresh transaction
+   * handle per request is the usual shape -- or restart the process so a
+   * new handle is built.
+   *
    * `createLedger` itself takes no handle -- most hosts build the ledger
    * once at module scope, before any connection exists at all, and pass a
    * handle only per call (`sign(handle, ...)`, `page(handle, ...)`, …) -- so

@@ -198,6 +198,20 @@ superuser fixture:
 const ledger = createLedger({ vocabulary, checkRuntimeRole: false }); // e.g. tests against PGlite's superuser connection
 ```
 
+The check is once per handle, on that handle's first use, not once per
+call and not on a timer. A handle a host holds for a long time -- a pooled
+connection, a client built once at module scope -- is checked once for as
+long as the host keeps using that same handle object, which can be the
+whole process lifetime; a role change made afterward (a revoked grant, a
+rotated `<database>_rt`) is not picked up on that handle. To have a role
+change take effect, give the ledger a handle it has not seen before -- pass
+a fresh transaction handle per request, which is the usual shape for a web
+host -- or restart the process. If your own tests run against a superuser
+connection -- PGlite is one, and so is a local Postgres reached as
+`postgres` -- pass `checkRuntimeRole: false` to `createLedger` in those
+tests, the same way this package's own PGlite-backed tests do; the check
+throws on a superuser connection by design.
+
 `assertRuntimeRole` also stays exported, for a host that wants the same
 check on a connection this package's ledger never sees, or that wants to
 fail before `createLedger` is even reachable -- its own boot path, the way
