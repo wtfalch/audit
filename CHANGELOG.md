@@ -31,6 +31,16 @@
   comment used to say "applies no permission; the host gates" -- now it
   does the gate itself, so a host that forgets to check is not left
   exposed. See ADR 0002 and README, "Reading across apps".
+- `migrations/0006_force_rls.sql`: `FORCE ROW LEVEL SECURITY` on
+  `audit_events`, so the table's owner is now subject to the same
+  tenant-scoped policy as `<database>_rt` -- a host that misconfigures its
+  runtime connection as the owner gets real isolation instead of none.
+  `read.ts`'s doc comment claiming RLS "backs the tenant filter... even if"
+  a predicate slipped was false for that one connection; it is now true.
+  See ADR 0002.
+
+## 0.6.0 — 2026-09-28
+
 - **Breaking for a host on `@wtfalch/design` below 0.28**: the `./react`
   readers were tested only against `@wtfalch/design` 0.23, while
   `peerDependencies` declared `>=0.23.0` -- a promise of compatibility with
@@ -50,14 +60,6 @@
   handle), so a host that never wires the check in on its own still fails
   closed. Opt out with `LedgerOptions.checkRuntimeRole: false` for a
   superuser test connection such as PGlite's (#25).
-- `migrations/0006_force_rls.sql`: `FORCE ROW LEVEL SECURITY` on
-  `audit_events`, so the table's owner is now subject to the same
-  tenant-scoped policy as `<database>_rt` -- a host that misconfigures its
-  runtime connection as the owner gets real isolation instead of none.
-  `read.ts`'s doc comment claiming RLS "backs the tenant filter... even if"
-  a predicate slipped was false for that one connection; it is now true.
-  See ADR 0002.
-
 ## 0.5.0 — 2026-09-23
 
 - Fix: `audit_erase_person` lost its empty-email guard and its lower-casing
