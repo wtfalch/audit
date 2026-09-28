@@ -1,12 +1,26 @@
 # Changelog
 
-## 0.5.1 — 2026-09-28
+## 0.6.0 — 2026-09-28
 
-- The `./react` readers were tested only against `@wtfalch/design` 0.23,
-  while `peerDependencies` declared `>=0.23.0` -- a promise of compatibility
-  with every later minor, none of which were ever tested. Tested against
-  design 0.28.0 (`pnpm check` green) and bound the peer to `^0.28.0`, per
-  package-template ADR 0016.
+- **Breaking for a host on `@wtfalch/design` below 0.28**: the `./react`
+  readers were tested only against `@wtfalch/design` 0.23, while
+  `peerDependencies` declared `>=0.23.0` -- a promise of compatibility with
+  every later minor, none of which were ever tested. Tested against design
+  0.28.0 (`pnpm check` green) and bound the peer to `^0.28.0`, per
+  package-template ADR 0016. A host importing `@wtfalch/audit/react` must
+  upgrade `@wtfalch/design` to 0.28.0 or later before taking this version;
+  a host that does not use `./react` is unaffected. Shipped as a minor
+  bump, not a patch, because it narrows what a caller may already depend on.
+- `assertRuntimeRole(handle)`: an opt-in check that queries the connected
+  role's privileges and throws `UnsafeRuntimeRoleError` if it can bypass
+  RLS (superuser or `BYPASSRLS`) or still holds `UPDATE`, `DELETE` or
+  `TRUNCATE` on `audit_events`, so a host that connects as anything but the
+  scoped `<database>_rt` role fails closed instead of silently losing both
+  the append-only guard and tenant isolation (#24).
+- `createLedger` now runs `assertRuntimeRole` by default (memoized once per
+  handle), so a host that never wires the check in on its own still fails
+  closed. Opt out with `LedgerOptions.checkRuntimeRole: false` for a
+  superuser test connection such as PGlite's (#25).
 
 ## 0.5.0 — 2026-09-23
 
