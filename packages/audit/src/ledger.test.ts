@@ -1,8 +1,9 @@
 import { pgTable, uuid } from 'drizzle-orm/pg-core';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { verifyChain } from './chain.js';
-import { type Ledger, createLedger } from './ledger.js';
+import { type Ledger, type PageOptions, createLedger } from './ledger.js';
 import { AUDIT_COLUMNS, auditIndexes } from './tables.js';
+import { ALLOW_AUDIT_READ, auditResource } from './test/access.js';
 import { CORE, type TestDb, testDb } from './test/db.js';
 import { ledgerVocabularyFromCore } from './vocabulary.js';
 
@@ -10,6 +11,18 @@ const TENANT_A = '11111111-1111-4111-8111-111111111111';
 const TENANT_B = '22222222-2222-4222-8222-222222222222';
 const ada = { class: 'human', id: 'user_ada', display: 'Ada Lovelace' };
 const ops = { class: 'human', id: 'op_1', display: 'Ops' };
+
+/** Every `page()` call below reads across tenants, so the fixture grants `audit:read` platform-wide; see `test/access.ts`. */
+function page(
+  handle: Parameters<Ledger['page']>[0],
+  options: Omit<PageOptions, 'access' | 'resource'>,
+) {
+  return ledger.page(handle, {
+    access: ALLOW_AUDIT_READ,
+    resource: auditResource(options.tenantId ?? null),
+    ...options,
+  });
+}
 
 let t: TestDb;
 let ledger: Ledger;
@@ -262,12 +275,12 @@ describe('page', () => {
   });
 
   it('pages newest first on (occurred_at, id) with no row lost or repeated', async () => {
-    const first = await ledger.page(t.db, { limit: 3 });
+    const first = await page(t.db, { limit: 3 });
     expect(first.items.map((r) => r.targetId)).toEqual(['i_6', 'i_5', 'i_4']);
     expect(first.next).not.toBeNull();
-    const second = await ledger.page(t.db, { limit: 3, after: first.next ?? undefined });
+    const second = await page(t.db, { limit: 3, after: first.next ?? undefined });
     expect(second.items.map((r) => r.targetId)).toEqual(['i_3', 'i_2', 'i_1']);
-    const third = await ledger.page(t.db, { limit: 3, after: second.next ?? undefined });
+    const third = await page(t.db, { limit: 3, after: second.next ?? undefined });
     expect(third.items.map((r) => r.targetId)).toEqual(['i_0']);
     expect(third.next).toBeNull();
   });
@@ -284,40 +297,41 @@ describe('page', () => {
         occurredAt: same,
       });
     }
-    const first = await ledger.page(t.db, { limit: 2 });
+    const first = await page(t.db, { limit: 2 });
     expect(first.items.map((r) => r.targetId)).toEqual(['tie_c', 'tie_b']);
-    const second = await ledger.page(t.db, { limit: 2, after: first.next ?? undefined });
+    const second = await page(t.db, { limit: 2, after: first.next ?? undefined });
     expect(second.items[0]?.targetId).toBe('tie_a');
   });
 
   it('filters by tenant, visibility, actor, subject, action and request', async () => {
-    expect((await ledger.page(t.db, { tenantId: TENANT_B })).items).toHaveLength(1);
-    expect((await ledger.page(t.db, { tenantId: TENANT_A })).items).toHaveLength(6);
+    expect((await page(t.db, { tenantId: TENANT_B })).items).toHaveLength(1);
+    expect((await page(t.db, { tenantId: TENANT_A })).items).toHaveLength(6);
     // tenant.created is not tenant-visible in the core.
-    expect(
-      (await ledger.page(t.db, { tenantId: TENANT_A, tenantVisibleOnly: true })).items,
-    ).toHaveLength(3);
-    expect((await ledger.page(t.db, { actorId: 'op_1' })).items.map((r) => r.targetId)).toEqual([
-      'i_3',
+    expect((await page(t.db, { tenantId: TENANT_A, tenantVisibleOnly: true })).items).toHaveLength(
+      3,
+    );
+    expect((await page(t.db, { actorId: 'op_1' })).items.map((r) => r.targetId)).toEqual(['i_3']);
+    expect((await page(t.db, { subjectId: 'user_bob' })).items.map((r) => r.targetId)).toEqual([
+      'i_5',
     ]);
-    expect(
-      (await ledger.page(t.db, { subjectId: 'user_bob' })).items.map((r) => r.targetId),
-    ).toEqual(['i_5']);
-    expect((await ledger.page(t.db, { action: 'tenant.created' })).items).toHaveLength(3);
-    expect((await ledger.page(t.db, { requestId: 'req_shared' })).items).toHaveLength(2);
-    expect((await ledger.page(t.db, { tenantId: null })).items).toHaveLength(0);
+    expect((await page(t.db, { action: 'tenant.created' })).items).toHaveLength(3);
+    expect((await page(t.db, { requestId: 'req_shared' })).items).toHaveLength(2);
+    expect((await page(t.db, { tenantId: null })).items).toHaveLength(0);
   });
 
   it('filters by action prefix and an occurred_at range', async () => {
     const base = new Date('2026-09-11T10:00:00Z').getTime();
-    expect(
-      (await ledger.page(t.db, { actionPrefix: 'invoice.' })).items.map((r) => r.targetId),
-    ).toEqual(['i_6', 'i_4', 'i_2', 'i_0']);
-    expect((await ledger.page(t.db, { actionPrefix: 'tenant.' })).items).toHaveLength(3);
+    expect((await page(t.db, { actionPrefix: 'invoice.' })).items.map((r) => r.targetId)).toEqual([
+      'i_6',
+      'i_4',
+      'i_2',
+      'i_0',
+    ]);
+    expect((await page(t.db, { actionPrefix: 'tenant.' })).items).toHaveLength(3);
     // occurredFrom and occurredTo are both inclusive; i_2..i_4 fall between them.
     expect(
       (
-        await ledger.page(t.db, {
+        await page(t.db, {
           occurredFrom: new Date(base + 2000),
           occurredTo: new Date(base + 4000),
         })
@@ -326,7 +340,7 @@ describe('page', () => {
     // Combined: only the range's invoice.paid rows.
     expect(
       (
-        await ledger.page(t.db, {
+        await page(t.db, {
           actionPrefix: 'invoice.',
           occurredFrom: new Date(base + 2000),
           occurredTo: new Date(base + 4000),
@@ -346,13 +360,13 @@ describe('page', () => {
     );
     // Unescaped, '_' in the pattern would match any single character, so
     // 'x.a_b%' would also match 'x.axb'. It must not.
-    const matched = await ledger.page(t.db, { actionPrefix: 'x.a_b' });
+    const matched = await page(t.db, { actionPrefix: 'x.a_b' });
     expect(matched.items.map((r) => r.targetId)).toEqual(['esc_literal']);
   });
 
   it('clamps the page size', async () => {
-    expect((await ledger.page(t.db, { limit: 0 })).items).toHaveLength(1);
-    expect((await ledger.page(t.db, { limit: 10_000 })).items).toHaveLength(7);
+    expect((await page(t.db, { limit: 0 })).items).toHaveLength(1);
+    expect((await page(t.db, { limit: 10_000 })).items).toHaveLength(7);
   });
 });
 

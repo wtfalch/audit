@@ -2,6 +2,7 @@ import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { type Ledger, createLedger } from './ledger.js';
 import type { Authorize } from './read.js';
 import { ledgerReadHandler } from './read.js';
+import { ALLOW_AUDIT_READ, DENY_AUDIT_READ } from './test/access.js';
 import { CORE, type TestDb, testDb } from './test/db.js';
 import { ledgerVocabularyFromCore } from './vocabulary.js';
 
@@ -37,12 +38,19 @@ async function seed(n: number, tenantId = TENANT_A, opts: { tenantVisible?: bool
   }
 }
 
-function authorizeAs(tenantId: string | null): Authorize {
-  return () => (tenantId ? { tenantId } : null);
+function authorizeAs(tenantId: string | null, access = ALLOW_AUDIT_READ): Authorize {
+  return () => (tenantId ? { tenantId, access } : null);
 }
 
 function handlerFor(authorize: Authorize) {
-  return ledgerReadHandler({ ledger, handle: t.db, authorize, defaultLimit: 2 });
+  return ledgerReadHandler({
+    ledger,
+    handle: t.db,
+    authorize,
+    applicationId: 'audit-test',
+    platformId: 'wtfalch',
+    defaultLimit: 2,
+  });
 }
 
 function req(query: string): Request {
@@ -68,6 +76,14 @@ describe('ledgerReadHandler', () => {
 
   it('answers forbidden when the credential is scoped to a different tenant', async () => {
     const handler = handlerFor(authorizeAs(TENANT_B));
+    const res = await handler(req(`?tenant=${TENANT_A}`));
+    expect(res.status).toBe(403);
+    const body = await res.json();
+    expect(body.error.code).toBe('forbidden');
+  });
+
+  it('answers forbidden when the credential lacks audit:read', async () => {
+    const handler = handlerFor(authorizeAs(TENANT_A, DENY_AUDIT_READ));
     const res = await handler(req(`?tenant=${TENANT_A}`));
     expect(res.status).toBe(403);
     const body = await res.json();

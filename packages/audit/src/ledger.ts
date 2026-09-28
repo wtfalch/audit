@@ -1,3 +1,4 @@
+import type { AccessResource, ResourceAccess } from '@wtfalch/authz';
 import { and, asc, desc, eq, gte, like, lt, lte, or, sql } from 'drizzle-orm';
 import type { PgDatabase, PgQueryResultHKT } from 'drizzle-orm/pg-core';
 import { computeErasureHash, sealRow } from './chain.js';
@@ -6,6 +7,20 @@ import { type AuditRow, rowSchema } from './schema.js';
 import { resultRows } from './sql-result.js';
 import { type AuditEventRow, type AuditTable, auditEvents as auditEvents_ } from './tables.js';
 import type { LedgerVocabulary } from './vocabulary.js';
+
+/**
+ * Thrown by `page()` when `options.access` does not allow `audit:read` on
+ * `options.resource`. Not an HTTP shape -- `ledgerReadHandler` (`read.ts`)
+ * checks the same thing itself, before it ever calls `page()`, and answers
+ * `forbidden` (403) on the wire; a host calling `page()` directly catches
+ * this instead.
+ */
+export class PermissionDeniedError extends Error {
+  constructor(permission: string) {
+    super(`audit: permission denied: ${permission}`);
+    this.name = 'PermissionDeniedError';
+  }
+}
 
 /**
  * The host's drizzle handle or a transaction open on it. postgres-js in the
@@ -62,6 +77,18 @@ export interface SignInput {
 }
 
 export interface PageOptions {
+  /**
+   * The caller's resolved `@wtfalch/authz` access, and the resource
+   * `audit:read` is checked against (this package's `catalogue.ts`).
+   * `page()` throws `PermissionDeniedError` unless
+   * `access.allows('audit:read', resource)` -- reading the ledger is a
+   * read like any other estate resource, not a bypass of it. A host
+   * builds `resource` itself (it owns `applicationId`/`platformId`); the
+   * usual shape is `{ type: 'audit.event', id: tenantId ?? 'platform',
+   * organisationId: tenantId, teamId: null, applicationId, platformId }`.
+   */
+  readonly access: ResourceAccess;
+  readonly resource: AccessResource;
   /** One tenant's rows; `null` for rows with no tenant; omit for every tenant. */
   readonly tenantId?: string | null;
   /** Only rows the tenant's own log may show. A tenant-facing reader passes `true` and never lets a caller choose. */
@@ -203,8 +230,8 @@ export interface Ledger {
   readonly tables: { readonly events: AuditTable };
   /** Validates against the vocabulary and inserts, on the handle given: a transaction when the row must commit with the change it records. */
   sign(handle: Handle, input: SignInput): Promise<void>;
-  /** Newest first, keyset on `(occurred_at, id)`. Applies no permission; the host gates and decides `tenantVisibleOnly`. */
-  page(handle: Handle, options?: PageOptions): Promise<Page>;
+  /** Newest first, keyset on `(occurred_at, id)`. Refuses `PermissionDeniedError` unless `options.access` allows `audit:read` on `options.resource`; the host still decides `tenantVisibleOnly`. */
+  page(handle: Handle, options: PageOptions): Promise<Page>;
   /** The one sanctioned write: `audit_erase_person`. Returns how many rows it touched. Call inside the host's erasure transaction. */
   erase(handle: Handle, input: EraseInput): Promise<number>;
   /** One tenant's rows, oldest first, for a tenant's export. Deterministic order; no secrets are in this table to omit. */
@@ -371,7 +398,10 @@ export function createLedger(options: LedgerOptions): Ledger {
     });
   }
 
-  async function page(handle: Handle, options: PageOptions = {}): Promise<Page> {
+  async function page(handle: Handle, options: PageOptions): Promise<Page> {
+    if (!options.access.allows('audit:read', options.resource)) {
+      throw new PermissionDeniedError('audit:read');
+    }
     await ensureRuntimeRoleChecked(handle);
     const limit = Math.max(1, Math.min(options.limit ?? 50, 200));
     const conditions = [];

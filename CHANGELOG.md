@@ -1,17 +1,18 @@
 # Changelog
 
-## 0.6.0 — 2026-09-28
+## 0.7.0 — 2026-09-28
 
 - `ledgerReadHandler`: a fetch-shaped handler for `GET /v1/audit?tenant=&
   cursor=&limit=`, returning a tenant's `tenantVisible` rows as
   `LedgerReadRow` (a deliberate subset of the full row), paged with the
   estate's `cursor`/`limit`/`nextCursor` convention
   (`@wtfalch/contracts` ADR 0008; an invalid or expired cursor answers
-  `conflict`). Authentication is a port, `authorize(request) => { tenantId }
-  | null`, not a dependency -- the host wires it from
+  `conflict`). Authentication is a port, `authorize(request) => { tenantId,
+  access } | null`, not a dependency -- the host wires it from
   `@wtfalch/keys/issued`'s `check()`; this package imports nothing from
   `keys`. A request whose credential's tenant differs from the `tenant`
-  parameter is refused (`forbidden`). See README, "Reading across apps".
+  parameter, or whose `access` does not allow `audit:read`, is refused
+  (`forbidden`). See README, "Reading across apps".
 - `fetchLedgerPage`/`fetchMergedLedgerPage`: a small client, for a host like
   Boule that fans out to several apps' `ledgerReadHandler` and merges their
   pages by `occurredAt`, one source's failure never blanking the rest.
@@ -19,6 +20,43 @@
   `PageCursor` type the handler and client both use. `ADR 0001` records why
   this stays a port for authentication but a real (optional) dependency for
   the wire contract.
+- **Breaking, `@wtfalch/authz` catalogue (`audit:read`)**: this package's
+  own catalogue (`catalogue.ts`) names `audit:read`, the one permission a
+  ledger reader needs. `ledgerReadHandler` refuses `forbidden` (403) and
+  `Ledger.page()` throws `PermissionDeniedError` unless the caller's
+  `access.allows('audit:read', resource)` -- a credential merely scoped to
+  the right tenant is no longer enough. `page()`'s `access` and `resource`
+  are now required options, and `ledgerReadHandlerOptions` gained
+  `applicationId`/`platformId` to build that resource. `page()`'s doc
+  comment used to say "applies no permission; the host gates" -- now it
+  does the gate itself, so a host that forgets to check is not left
+  exposed. See ADR 0002 and README, "Reading across apps".
+- **Breaking for a host on `@wtfalch/design` below 0.28**: the `./react`
+  readers were tested only against `@wtfalch/design` 0.23, while
+  `peerDependencies` declared `>=0.23.0` -- a promise of compatibility with
+  every later minor, none of which were ever tested. Tested against design
+  0.28.0 (`pnpm check` green) and bound the peer to `^0.28.0`, per
+  package-template ADR 0016. A host importing `@wtfalch/audit/react` must
+  upgrade `@wtfalch/design` to 0.28.0 or later before taking this version;
+  a host that does not use `./react` is unaffected. Shipped as a minor
+  bump, not a patch, because it narrows what a caller may already depend on.
+- `assertRuntimeRole(handle)`: an opt-in check that queries the connected
+  role's privileges and throws `UnsafeRuntimeRoleError` if it can bypass
+  RLS (superuser or `BYPASSRLS`) or still holds `UPDATE`, `DELETE` or
+  `TRUNCATE` on `audit_events`, so a host that connects as anything but the
+  scoped `<database>_rt` role fails closed instead of silently losing both
+  the append-only guard and tenant isolation (#24).
+- `createLedger` now runs `assertRuntimeRole` by default (memoized once per
+  handle), so a host that never wires the check in on its own still fails
+  closed. Opt out with `LedgerOptions.checkRuntimeRole: false` for a
+  superuser test connection such as PGlite's (#25).
+- `migrations/0006_force_rls.sql`: `FORCE ROW LEVEL SECURITY` on
+  `audit_events`, so the table's owner is now subject to the same
+  tenant-scoped policy as `<database>_rt` -- a host that misconfigures its
+  runtime connection as the owner gets real isolation instead of none.
+  `read.ts`'s doc comment claiming RLS "backs the tenant filter... even if"
+  a predicate slipped was false for that one connection; it is now true.
+  See ADR 0002.
 
 ## 0.5.0 — 2026-09-23
 

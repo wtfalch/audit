@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { verifyChain } from './chain.js';
 import { createLedger } from './ledger.js';
+import { ALLOW_AUDIT_READ, auditResource } from './test/access.js';
 import { type TestDb, testDb } from './test/db.js';
 import { ledgerVocabulary } from './vocabulary.js';
 
@@ -54,7 +55,12 @@ describe('a ledger for a service with no tenant database', () => {
       after: plan,
     });
 
-    const { items } = await ledger.page(t.db, { tenantId: null, actionPrefix: 'plan.' });
+    const { items } = await ledger.page(t.db, {
+      access: ALLOW_AUDIT_READ,
+      resource: auditResource(null),
+      tenantId: null,
+      actionPrefix: 'plan.',
+    });
     expect(items.map((r) => [r.action, r.outcome])).toEqual([
       ['plan.applied', 'refused'],
       ['plan.computed', 'success'],

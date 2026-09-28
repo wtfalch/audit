@@ -4,6 +4,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { verifyChain } from './chain.js';
 import { type Handle, createLedger, scopeAuditTenant } from './ledger.js';
 import { type AuditEventRow, auditEvents, tables } from './tables.js';
+import { ALLOW_AUDIT_READ, auditResource } from './test/access.js';
 import { CORE, MIGRATION_SQL } from './test/db.js';
 import { ledgerVocabularyFromCore } from './vocabulary.js';
 
@@ -96,7 +97,11 @@ describe('row-level security on audit_events', () => {
       await scopeAuditTenant(tx, TENANT_A);
       expect(await visibleTargets(tx)).toEqual(['a1']);
       // ledger.page() with the wrong tenant, the mistake RLS is for.
-      const leaked = await ledger.page(tx, { tenantId: TENANT_B });
+      const leaked = await ledger.page(tx, {
+        access: ALLOW_AUDIT_READ,
+        resource: auditResource(TENANT_B),
+        tenantId: TENANT_B,
+      });
       expect(leaked.items).toEqual([]);
     });
     // Transaction-local: gone at commit.

@@ -63,8 +63,10 @@ await db.transaction(async (tx) => {
   });
 });
 
-// Readers. The host gates; a tenant-facing page always passes tenantVisibleOnly.
-const page = await ledger.page(db, { tenantId, tenantVisibleOnly: true, limit: 50 });
+// Readers. `page()` refuses unless `access` allows `audit:read` on `resource`;
+// a tenant-facing page also always passes tenantVisibleOnly.
+const resource = { type: 'audit.event', id: tenantId, organisationId: tenantId, teamId: null, applicationId, platformId };
+const page = await ledger.page(db, { access, resource, tenantId, tenantVisibleOnly: true, limit: 50 });
 const rows = await ledger.exportRows(db, tenantId);
 
 // Erasure, inside the host's own erasure transaction.
@@ -157,16 +159,19 @@ The database is the one thing the package cannot supply.
 
 ## Tenant isolation in the database
 
-`migrations/0005_rls.sql` turns on row-level security. For every role but the
-table's owner, a read inside a tenant-scoped transaction sees that tenant's
-rows and nothing else, whatever predicate the query forgot:
+`migrations/0005_rls.sql` turns on row-level security, and
+`migrations/0006_force_rls.sql` forces it: a read inside a tenant-scoped
+transaction sees that tenant's rows and nothing else, whatever predicate the
+query forgot, for every role -- including the table's owner, not just
+`<database>_rt`. Only an actual Postgres superuser bypasses RLS regardless of
+FORCE, and a host's runtime connection should never be one.
 
 ```ts
 import { scopeAuditTenant } from '@wtfalch/audit';
 
 await db.transaction(async (tx) => {
   await scopeAuditTenant(tx, tenantId); // set_config('audit.tenant_id', ..., true)
-  const page = await ledger.page(tx, { tenantId, tenantVisibleOnly: true });
+  const page = await ledger.page(tx, { access, resource, tenantId, tenantVisibleOnly: true });
 });
 ```
 
@@ -179,8 +184,7 @@ alter role <database>_rt set audit.require_tenant = 'on';
 ```
 
 An operator surface that reads across tenants then connects as another role.
-Which role that is belongs to the host. An app that connects as the table's
-owner gets no RLS at all.
+Which role that is belongs to the host.
 
 Neither that nor the append-only revoke above was enforced at runtime by
 this package before `assertRuntimeRole`: both depend on the connection
@@ -247,7 +251,13 @@ for the reasoning behind this shape.
 ```ts
 import { ledgerReadHandler } from '@wtfalch/audit';
 
-const handler = ledgerReadHandler({ ledger, handle: db, authorize });
+const handler = ledgerReadHandler({
+  ledger,
+  handle: db,
+  authorize,
+  applicationId: 'files', // this host's own ids, for the AccessResource audit:read is checked against
+  platformId: 'wtfalch',
+});
 // Next.js: export const GET = (request) => handler(request);
 ```
 
@@ -260,10 +270,12 @@ decode answers `conflict` (409) -- restart from the first page.
 
 ### `authorize`: a port, not a dependency
 
-`authorize(request) => { tenantId } | null` is the whole contract. This
-package imports nothing from `@wtfalch/keys` -- a host wires it from
+`authorize(request) => { tenantId, access } | null` is the whole contract.
+This package imports nothing from `@wtfalch/keys` -- a host wires it from
 `@wtfalch/keys/issued`'s `check()`, reading `tenantId` off whichever grant
-shape that host's own issuer uses:
+shape that host's own issuer uses, and resolves `access` (a
+`@wtfalch/authz` `ResourceAccess`) the same way its other routes already do
+for that credential:
 
 ```ts
 import type { Authorize } from '@wtfalch/audit';
@@ -278,14 +290,17 @@ const authorize: Authorize = async (request) => {
   const result = await issuer.check(secret);
   if (!result.ok) return null;
   const grant = result.grants.find((g) => g.scope === 'audit:read');
-  return grant ? { tenantId: grant.tenantId } : null;
+  if (!grant) return null;
+  const access = resourceAccessFor(result); // this host's own resolution, as for any other route
+  return { tenantId: grant.tenantId, access };
 };
 ```
 
 A request whose credential resolves to a different tenant than the
-`tenant` query parameter is refused (`forbidden`), never silently
-substituted -- Boule fans out with one credential per tenant per app, not
-one credential that can read every tenant.
+`tenant` query parameter, or whose `access` does not allow `audit:read`, is
+refused (`forbidden`), never silently substituted -- Boule fans out with
+one credential per tenant per app, not one credential that can read every
+tenant.
 
 ### The client
 
@@ -318,7 +333,7 @@ format Splunk, QRadar, Sentinel and ArcSight ingest directly or over syslog;
 ```ts
 import { toCef, toCefLines } from '@wtfalch/audit';
 
-const { items } = await ledger.page(db, { tenantId, limit: 500 });
+const { items } = await ledger.page(db, { access, resource, tenantId, limit: 500 });
 const body = toCefLines(items, { vendor: 'Acme', product: 'Acme', version: '2.3' });
 ```
 

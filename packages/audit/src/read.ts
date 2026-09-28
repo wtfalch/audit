@@ -1,3 +1,4 @@
+import type { AccessResource, ResourceAccess } from '@wtfalch/authz';
 import { ServiceError, serviceErrorResponse } from '@wtfalch/contracts';
 import type { PageCursor } from '@wtfalch/contracts';
 import type { Handle, Ledger, Page } from './ledger.js';
@@ -45,12 +46,16 @@ export interface LedgerReadPage {
 
 /**
  * What a host's `authorize` resolves a request's credential to: the one
- * tenant it is scoped to. `null` means the request carries no credential
- * this host recognises, or one this endpoint refuses outright -- the
- * handler answers `unauthorized` either way, never learning why.
+ * tenant it is scoped to, and the `@wtfalch/authz` access that credential
+ * holds -- `access.allows('audit:read', resource)` is what decides whether
+ * this handler answers the request or refuses `forbidden`. `null` means the
+ * request carries no credential this host recognises, or one this endpoint
+ * refuses outright -- the handler answers `unauthorized` either way, never
+ * learning why.
  */
 export interface AuthorizedRead {
   readonly tenantId: string;
+  readonly access: ResourceAccess;
 }
 
 /**
@@ -70,6 +75,13 @@ export interface LedgerReadHandlerOptions {
   /** The connection `page()` reads on. A transaction is opened per request to scope it with `scopeAuditTenant`; a plain pooled handle works too. */
   readonly handle: Handle;
   readonly authorize: Authorize;
+  /**
+   * This host's own ids, to build the `AccessResource` `audit:read` is
+   * checked against -- `@wtfalch/audit` has no `applicationId`/`platformId`
+   * of its own to supply them.
+   */
+  readonly applicationId: string;
+  readonly platformId: string;
   /** Default 50, same as `ledger.page()`'s own default. */
   readonly defaultLimit?: number;
 }
@@ -134,20 +146,25 @@ function decodeCursor(cursor: string): { occurredAt: Date; id: number } | null {
  * own; the host is what listens.
  *
  * Every read runs inside a transaction scoped with `scopeAuditTenant`, so
- * row-level security backs the tenant filter even if a future change to
- * this function's own `tenantId` condition slipped.
+ * row-level security (`migrations/0005_rls.sql`, forced by
+ * `migrations/0006_force_rls.sql`) backs the tenant filter even if a future
+ * change to this function's own `tenantId` condition slipped -- forced, so
+ * this holds even for a connection that is the table's owner, not just
+ * `<database>_rt`; only an actual Postgres superuser bypasses RLS, forced
+ * or not, and a host's runtime connection should never be one.
  *
  * Refusals: no credential or an unrecognised one is `unauthorized` (401); a
- * credential scoped to a different tenant than the `tenant` query parameter
- * is `forbidden` (403), never silently substituted; a missing `tenant` or a
- * malformed `limit` is `invalid_request` (400); a `cursor` that fails to
- * decode is `conflict` (409), meaning "restart from the first page"
- * (`@wtfalch/contracts` ADR 0008).
+ * credential scoped to a different tenant than the `tenant` query parameter,
+ * or one that does not hold `audit:read` on it, is `forbidden` (403), never
+ * silently substituted; a missing `tenant` or a malformed `limit` is
+ * `invalid_request` (400); a `cursor` that fails to decode is `conflict`
+ * (409), meaning "restart from the first page" (`@wtfalch/contracts` ADR
+ * 0008).
  */
 export function ledgerReadHandler(
   options: LedgerReadHandlerOptions,
 ): (request: Request) => Promise<Response> {
-  const { ledger, handle, authorize, defaultLimit = 50 } = options;
+  const { ledger, handle, authorize, applicationId, platformId, defaultLimit = 50 } = options;
 
   return async (request: Request): Promise<Response> => {
     const auth = await authorize(request);
@@ -165,6 +182,20 @@ export function ledgerReadHandler(
     if (auth.tenantId !== tenant) {
       return serviceErrorResponse(
         new ServiceError('forbidden', 'this credential is not scoped to the requested tenant'),
+      );
+    }
+
+    const resource: AccessResource = {
+      id: tenant,
+      type: 'audit.event',
+      applicationId,
+      platformId,
+      organisationId: tenant,
+      teamId: null,
+    };
+    if (!auth.access.allows('audit:read', resource)) {
+      return serviceErrorResponse(
+        new ServiceError('forbidden', 'this credential lacks audit:read'),
       );
     }
 
@@ -199,7 +230,14 @@ export function ledgerReadHandler(
 
     const page = await handle.transaction(async (tx) => {
       await scopeAuditTenant(tx, tenant);
-      return ledger.page(tx, { tenantId: tenant, tenantVisibleOnly: true, limit, after });
+      return ledger.page(tx, {
+        access: auth.access,
+        resource,
+        tenantId: tenant,
+        tenantVisibleOnly: true,
+        limit,
+        after,
+      });
     });
 
     const body: LedgerReadPage = {

@@ -1,5 +1,6 @@
 export type { ChainVerifyResult, SealedChain, SealInput } from './chain.js';
 export { computeErasureHash, sealRow, verifyChain } from './chain.js';
+export { auditPolicyModule, catalogue, type Permission } from './catalogue.js';
 export {
   fetchLedgerPage,
   fetchMergedLedgerPage,
