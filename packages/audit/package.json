@@ -61,7 +61,7 @@
     "@types/node": "^22",
     "@types/react": "^19",
     "@types/react-dom": "^19",
-    "@wtfalch/design": "^0.28.0",
+    "@wtfalch/design": "0.28.0",
     "drizzle-orm": "^0.39.3",
     "jsdom": "^30.0.1",
     "postgres": "^3.4.5",
