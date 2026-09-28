@@ -15,7 +15,7 @@ real is the host's, and it holds only while the signer stays private.
 | Concern | Where |
 | --- | --- |
 | Column bounds, JSON size, `namespace.name` action shape, subject pair, break-glass shape | `migrations/0001_audit.sql` CHECKs, and `rowSchema` before the insert |
-| Append-only: no DELETE, no TRUNCATE, UPDATE limited to what erasure touches | `audit_events_guard` trigger, plus a revoke from `<database>_rt` |
+| Append-only: no DELETE, no TRUNCATE, UPDATE limited to what erasure touches | `audit_events_guard` trigger, plus a revoke from `<database>_rt`; `assertRuntimeRole` checks the revoke actually landed on the connected role |
 | The closed sets: which events, actor classes, contexts, outcomes, reason codes | `LedgerVocabulary` in TypeScript at write time; the host's own CHECKs in the database when it has them |
 | Who may sign what | The host. The package checks no permission and reads no session |
 | Tenant visibility | Decided per event in the vocabulary, never per write |
@@ -177,6 +177,25 @@ alter role <database>_rt set audit.require_tenant = 'on';
 An operator surface that reads across tenants then connects as another role.
 Which role that is belongs to the host. An app that connects as the table's
 owner gets no RLS at all.
+
+Neither that nor the append-only revoke above is enforced at runtime by
+this package: both depend on the connection being named exactly
+`<database>_rt`, and no migration can see what role a given deployment's
+connection string will actually resolve to. `assertRuntimeRole(handle)`
+closes that at startup instead of leaving it silent -- it throws
+`UnsafeRuntimeRoleError` if the connected role can bypass row-level security
+(superuser or BYPASSRLS) or still holds UPDATE, DELETE or TRUNCATE on
+`audit_events`:
+
+```ts
+import { assertRuntimeRole } from '@wtfalch/audit';
+
+await assertRuntimeRole(db); // throws if the connection is not the `_rt` role, or one shaped like it
+```
+
+It is opt-in, not something `createLedger` calls itself -- a host wires it
+into its own boot path, once, the way `@wtfalch/tasks`'s
+`apps/host/src/lib/runtime-role-guard.ts` does for that package's tables.
 
 With `hashChain` on, `sign()` and `erase()` now read the chain tail and the
 pending erasures through `audit_chain_tail()` and `audit_pending_erasures()`,
