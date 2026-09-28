@@ -56,6 +56,13 @@ nothing about this package's "no framework" footprint. It stays optional
 (`peerDependenciesMeta`) alongside `design`/`react`: a host that never
 mounts `ledgerReadHandler` does not need it.
 
+**Update 2026-09-28 (audit#33):** "does not need it" was a promise the root
+entry did not keep -- `src/index.ts` re-exported `read.ts`, which imports
+`@wtfalch/contracts` at the top level, so any import of `@wtfalch/audit`
+pulled it in whether or not the caller ever touched `ledgerReadHandler`.
+Fixed by moving the handler and its client behind `@wtfalch/audit/read`, the
+same split `design`/`react` already have as `@wtfalch/audit/react`.
+
 **The shared row DTO is a subset, not the full row.** `LedgerReadRow` drops
 `before`/`after` (an app's own business payload, not standardized across
 apps), `sessionId`/`requestId`/`ip`/`userAgent` (request metadata that

@@ -246,10 +246,16 @@ show one merged security log, without any app's signer leaving its own
 trusted base. See [ADR 0001](../../docs/adr/0001-ledger-read-handler.md)
 for the reasoning behind this shape.
 
+Everything below imports from `@wtfalch/audit/read`, not the root entry:
+`@wtfalch/contracts` is an optional peer, and the root entry never loads it,
+so a host that only writes to the ledger never needs it installed. Add
+`@wtfalch/contracts` before mounting `ledgerReadHandler` or calling
+`fetchMergedLedgerPage`.
+
 ### The handler
 
 ```ts
-import { ledgerReadHandler } from '@wtfalch/audit';
+import { ledgerReadHandler } from '@wtfalch/audit/read';
 
 const handler = ledgerReadHandler({
   ledger,
@@ -278,7 +284,7 @@ shape that host's own issuer uses, and resolves `access` (a
 for that credential:
 
 ```ts
-import type { Authorize } from '@wtfalch/audit';
+import type { Authorize } from '@wtfalch/audit/read';
 
 // issuer: CredentialIssuer<{ tenantId: string; scope: 'audit:read' }>
 // from createCredentialIssuer (@wtfalch/keys/issued), built once at module
@@ -305,7 +311,7 @@ tenant.
 ### The client
 
 ```ts
-import { fetchMergedLedgerPage } from '@wtfalch/audit';
+import { fetchMergedLedgerPage } from '@wtfalch/audit/read';
 
 const page = await fetchMergedLedgerPage({
   tenant: tenantId,

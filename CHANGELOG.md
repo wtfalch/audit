@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.8.0 — 2026-09-28
+
+- **Breaking**: `ledgerReadHandler`, `fetchLedgerPage`/`fetchMergedLedgerPage`,
+  `LedgerReadError` and their types moved from the root entry to
+  `@wtfalch/audit/read`. `read.ts` imports `@wtfalch/contracts` at the top
+  level, so re-exporting it from the root meant a host that only writes to
+  the ledger -- never mounts `ledgerReadHandler` -- still crashed on
+  `import ... from '@wtfalch/audit'` without `@wtfalch/contracts` installed,
+  even though that peer is marked optional. The same split `./react` already
+  has for `@wtfalch/design`/`react`/`react-dom`. Update any import of these
+  names to `@wtfalch/audit/read` (audit#33).
+- `force-rls.test.ts` gained a case connecting as the table's owner (no
+  `set role`), scoping to a tenant, and asserting another tenant's row is
+  invisible -- the connection `0006_force_rls.sql`'s `FORCE` actually
+  changes who RLS applies to; the existing case ran as the non-owner
+  runtime role, which RLS already covered with or without `FORCE`.
+
 ## 0.7.0 — 2026-09-28
 
 - `ledgerReadHandler`: a fetch-shaped handler for `GET /v1/audit?tenant=&
