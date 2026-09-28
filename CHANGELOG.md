@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.1 — 2026-09-28
+
+- The `./react` readers were tested only against `@wtfalch/design` 0.23,
+  while `peerDependencies` declared `>=0.23.0` -- a promise of compatibility
+  with every later minor, none of which were ever tested. Tested against
+  design 0.28.0 (`pnpm check` green) and bound the peer to `^0.28.0`, per
+  package-template ADR 0016.
+
 ## 0.5.0 — 2026-09-23
 
 - Fix: `audit_erase_person` lost its empty-email guard and its lower-casing
