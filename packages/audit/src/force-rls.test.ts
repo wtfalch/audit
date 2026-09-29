@@ -98,4 +98,67 @@ describe.skipIf(!url)('forced row-level security', () => {
       await owner.end();
     }
   });
+
+  it('scopes the table owner connection to a tenant, with FORCE the whole point', async () => {
+    if (!url) return;
+    // The case above proves 0005_rls.sql's ordinary policy, as `<database>_rt`
+    // -- a role RLS already governs with or without FORCE. FORCE's entire
+    // job is applying that same policy to the table's *owner*, which
+    // 0005_rls.sql explicitly left exempt. A superuser (or a BYPASSRLS role)
+    // ignores RLS regardless of FORCE, same as PGlite always does -- this
+    // repo's own TEST_DATABASE_URL fixture is exactly such a superuser -- so
+    // this test builds its own definitely-unprivileged owner role, creates
+    // the schema as it, and never runs `set role`: that connection stays the
+    // table's actual owner throughout. Remove `force row level security`
+    // from 0006_force_rls.sql and this is the case that turns red: the owner
+    // would bypass the policy and see both tenants' rows.
+    const ownerRole = 'audit_force_rls_owner';
+    const admin = postgres(url, { prepare: false, max: 1 });
+    try {
+      await admin.unsafe('drop schema public cascade;');
+      await admin.unsafe(
+        `do $$ begin
+           if not exists (select 1 from pg_roles where rolname = '${ownerRole}') then
+             create role "${ownerRole}" login password 'owner' nosuperuser nobypassrls;
+           else
+             alter role "${ownerRole}" nosuperuser nobypassrls password 'owner';
+           end if;
+         end $$;`,
+      );
+      await admin.unsafe(`create schema public authorization "${ownerRole}";`);
+    } finally {
+      await admin.end();
+    }
+
+    // A fresh connection authenticated as the role above, never the admin
+    // connection with a `set role` -- so this genuinely is the object
+    // owner's own session, not a superuser wearing it temporarily.
+    const owner = postgres(url, { prepare: false, max: 1, user: ownerRole, password: 'owner' });
+    try {
+      await owner.unsafe(MIGRATION_SQL);
+
+      // Seeded directly, as the owner -- bypassing the ledger entirely, so
+      // this proves the table's own RLS, not any application-level filter.
+      await owner.unsafe(
+        `insert into audit_events (tenant_id, actor_class, actor_id, actor_display, action, target_type, target_id, outcome, context, tenant_visible) values
+         ('${TENANT_A}','human','u1','U','membership.created','membership','a1','success','standard',true),
+         ('${TENANT_B}','human','u1','U','membership.created','membership','b1','success','standard',true)`,
+      );
+
+      const db = drizzlePostgres(owner) as unknown as Handle;
+      const vocabulary = ledgerVocabularyFromCore(CORE);
+      const ledger = createLedger({ vocabulary, checkRuntimeRole: false });
+
+      const scoped = await db.transaction(async (tx) => {
+        await scopeAuditTenant(tx, TENANT_A);
+        return ledger.page(tx, {
+          access: ALLOW_AUDIT_READ,
+          resource: auditResource(TENANT_A),
+        });
+      });
+      expect(scoped.items.map((r) => r.targetId)).toEqual(['a1']);
+    } finally {
+      await owner.end();
+    }
+  });
 });
