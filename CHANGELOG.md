@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.9.0 — 2026-09-29
+
+- **Breaking for a host on `@wtfalch/design` below 0.30**: the `./react`
+  reader (`SecurityLog`, on `ActivityLine`/`Pagination`) is now tested
+  against `@wtfalch/design` 0.30.0, which rewrote `Toggle`'s busy state
+  (an opacity pulse on the knob, a new spring on the themeable
+  `--dur-spring` token; `Toggle`'s own props are unchanged, and this
+  package renders no `Toggle`) -- design's own CHANGELOG marks 0.29.0 and
+  0.30.0 both not breaking. Bound the peer to `^0.30.0`, per the same
+  package-template ADR 0016 discipline as 0.6.0. A host importing
+  `@wtfalch/audit/react` must upgrade `@wtfalch/design` to 0.30.0 or later
+  before taking this version; a host that does not use `./react` is
+  unaffected. Shipped as a minor bump, not a patch, for the same reason as
+  0.6.0: it narrows what a caller may already depend on.
+
 ## 0.8.0 — 2026-09-28
 
 - **Breaking**: `ledgerReadHandler`, `fetchLedgerPage`/`fetchMergedLedgerPage`,
