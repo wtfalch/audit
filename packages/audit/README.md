@@ -243,11 +243,14 @@ both added in 0005. Apply 0005 before deploying this version.
 `verifyChain` over it:
 
 ```sh
-pnpm exec audit-verify-chain --database-url "$ADMIN_DATABASE_URL"
+DATABASE_URL="$ADMIN_DATABASE_URL" pnpm exec audit-verify-chain
 ```
 
 It exits 0 when the chain holds, 1 when it does not (printing the first bad
-row's id and the reason), and 2 when it could not run. Connect as the
+row's id and the reason), 2 when it could not run, and 3 when the table
+held 0 rows, so nothing was verified (it prints a warning; the runtime role
+reads 0 rows under row-level security). Give the URL as `DATABASE_URL`, not
+`--database-url`, so the password stays out of the process list. Connect as the
 table's owner or an admin role, not the runtime role: row-level security
 hides other tenants' rows from that role and the chain would look broken.
 It needs the `postgres` package installed (an optional peer).

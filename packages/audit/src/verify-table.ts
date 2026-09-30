@@ -14,7 +14,7 @@ export type TableVerifyResult =
     };
 
 export interface VerifyTableOptions {
-  /** Start after this row id (exclusive), for a table whose early rows predate `hashChain` and are `'unsealed'`. The first row checked is not linked back to anything. */
+  /** Start after this row id (exclusive), for a table whose early rows predate `hashChain` and are `'unsealed'`. The first row checked is not linked back to anything. Without it the first row must have no `prev_hash`, so deleted early rows are caught. */
   readonly afterId?: number;
   /** The `row_hash` the newest row must have, from an anchor kept outside the database. Without it, rows deleted off the end are undetectable. */
   readonly head?: string;
@@ -46,7 +46,10 @@ export async function verifyTable(
       .orderBy(asc(auditEvents.id))
       .limit(pageSize);
     if (page.length === 0) break;
-    const result = await verifyChain(page, previous === undefined ? {} : { origin: previous });
+    // A whole-table run anchors the front with origin null, so deleting the earliest rows breaks the link. With afterId the start is a window, so the first row is not linked back.
+    const origin =
+      previous !== undefined ? previous : options.afterId === undefined ? null : undefined;
+    const result = await verifyChain(page, origin === undefined ? {} : { origin });
     if (!result.ok)
       return { ok: false, id: page[result.index]?.id ?? lastId, reason: result.reason };
     const last = page[page.length - 1];

@@ -7,7 +7,9 @@ import { verifyTable } from '../verify-table.js';
  *
  * Runs `verifyChain` over the whole `audit_events` table and exits 0 when
  * the chain holds, 1 when it does not (naming the first bad row), 2 when it
- * could not run (bad arguments, no connection). The URL may also come from
+ * could not run (bad arguments, no connection), 3 when the table read 0 rows
+ * (nothing was verified: an empty ledger, or a role that row-level security
+ * hides every row from). The URL may also come from
  * `DATABASE_URL`. Connect as the table's owner or an admin, not the runtime
  * role: row-level security hides other tenants' rows from that role.
  *
@@ -37,7 +39,9 @@ function parse(argv: readonly string[]) {
   const afterId = afterRaw === undefined ? undefined : Number(afterRaw);
   if (afterId !== undefined && !Number.isInteger(afterId))
     throw new Error('--after-id is not an integer');
-  return { url, afterId, head: values['--head'] };
+  const head = values['--head'];
+  if (head === '') throw new Error('--head is empty');
+  return { url, afterId, head };
 }
 
 async function main(): Promise<number> {
@@ -58,6 +62,12 @@ async function main(): Promise<number> {
       afterId: args.afterId,
       head: args.head,
     });
+    if (result.ok && result.rows === 0) {
+      console.error(
+        'warning: audit chain has 0 rows, nothing was verified. Is this an owner/admin connection? The runtime role reads no rows under row-level security.',
+      );
+      return 3;
+    }
     if (result.ok) {
       console.log(`audit chain ok: ${result.rows} rows, head ${result.head ?? 'none'}`);
       return 0;

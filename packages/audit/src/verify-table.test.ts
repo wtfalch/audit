@@ -76,6 +76,16 @@ describe('verifyTable', () => {
     expect(result).toMatchObject({ ok: false, reason: 'link' });
   });
 
+  it('catches the earliest rows deleted, unless afterId makes the start a window', async () => {
+    await sign(chained, 4);
+    await t.exec('alter table audit_events disable trigger all');
+    await t.exec('delete from audit_events where id = (select min(id) from audit_events)');
+    await t.exec('alter table audit_events enable trigger all');
+    expect(await verifyTable(t.db)).toMatchObject({ ok: false, reason: 'link' });
+    const [first] = await t.query('select id from audit_events order by id limit 1');
+    expect(await verifyTable(t.db, { afterId: Number(first?.id) })).toMatchObject({ ok: true });
+  });
+
   it('catches rows cut off the end only when a head is given', async () => {
     await sign(chained, 4);
     const first = await verifyTable(t.db);

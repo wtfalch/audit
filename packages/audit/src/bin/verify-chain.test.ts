@@ -63,8 +63,20 @@ describe.skipIf(!url || !existsSync(bin))('audit-verify-chain', () => {
     expect(broken.stderr).toContain('audit chain BROKEN at row id');
   });
 
+  it('exits 3 with a warning when the table has 0 rows', async () => {
+    await t.exec('alter table audit_events disable trigger all');
+    await t.exec('delete from audit_events');
+    const empty = spawnSync('node', [bin], {
+      encoding: 'utf8',
+      env: { ...process.env, DATABASE_URL: url ?? '' },
+    });
+    expect(empty.status).toBe(3);
+    expect(empty.stderr).toContain('0 rows');
+  });
+
   it('exits 2 on bad arguments', () => {
     expect(run('--nope').status).toBe(2);
     expect(run('--database-url').status).toBe(2);
+    expect(run('--database-url', url ?? '', '--head', '').status).toBe(2);
   });
 });
