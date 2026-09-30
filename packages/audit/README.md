@@ -236,6 +236,33 @@ With `hashChain` on, `sign()` and `erase()` now read the chain tail and the
 pending erasures through `audit_chain_tail()` and `audit_pending_erasures()`,
 both added in 0005. Apply 0005 before deploying this version.
 
+## Verifying the chain
+
+`hashChain` costs a serialization on every write; the payoff is checking it.
+`audit-verify-chain` reads the whole `audit_events` table and runs
+`verifyChain` over it:
+
+```sh
+pnpm exec audit-verify-chain --database-url "$ADMIN_DATABASE_URL"
+```
+
+It exits 0 when the chain holds, 1 when it does not (printing the first bad
+row's id and the reason), and 2 when it could not run. Connect as the
+table's owner or an admin role, not the runtime role: row-level security
+hides other tenants' rows from that role and the chain would look broken.
+It needs the `postgres` package installed (an optional peer).
+
+- `--after-id <n>` skips rows up to an id, for a table whose early rows
+  were written before `hashChain` was on and report `unsealed`.
+- `--head <hash>` is the `row_hash` the newest row must have. Keep the last
+  run's printed head somewhere outside the database; without it, rows
+  deleted off the end are not detectable.
+
+Run it on a schedule, for example a nightly cron or scheduled CI job, and
+page on a non-zero exit. The same check is `verifyTable(handle, options)`
+from the root entry, for a host that would rather call it from its own job.
+The scheduling is the host's; this package ships no framework for it.
+
 ## Reading across apps
 
 The ledger stays per app (see "A service with no tenant database" and

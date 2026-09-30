@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.10.0 — unreleased
+
+- `audit-verify-chain` command and `verifyTable(handle, options)`: run
+  `verifyChain` over a whole live `audit_events` table, page by page, and
+  exit non-zero with the first bad row's id when the chain is broken. Until
+  now nothing in the package called `verifyChain`. `postgres` is a new
+  optional peer, needed only by the command. (#23)
+
 ## 0.9.0 — 2026-09-29
 
 - **Breaking for a host on `@wtfalch/design` below 0.30**: the `./react`

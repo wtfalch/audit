@@ -8,6 +8,8 @@
  */
 export type { ChainVerifyResult, SealedChain, SealInput } from './chain.js';
 export { computeErasureHash, sealRow, verifyChain } from './chain.js';
+export type { TableVerifyResult, VerifyTableOptions } from './verify-table.js';
+export { verifyTable } from './verify-table.js';
 export { auditPolicyModule, catalogue, type Permission } from './catalogue.js';
 export * from './ledger.js';
 export { assertRuntimeRole, UnsafeRuntimeRoleError } from './runtime-role-guard.js';
