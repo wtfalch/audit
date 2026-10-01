@@ -13,6 +13,10 @@ importers:
         version: 1.9.4
 
   packages/audit:
+    dependencies:
+      '@wtfalch/utils':
+        specifier: 0.1.0
+        version: 0.1.0
     devDependencies:
       '@electric-sql/pglite':
         specifier: ^0.5.8
@@ -405,6 +409,10 @@ packages:
         optional: true
       zod:
         optional: true
+
+  '@wtfalch/utils@0.1.0':
+    resolution: {integrity: sha512-ofvjquhSN7oKpkJ/A5nB3gdCauIldu/VTocKnePGxEL1qgjiZWZ1pkK3nV9lkqX0JEwTMiiuuNlmaTvY/3NN/Q==}
+    engines: {node: '>=22.0.0'}
 
   aria-hidden@1.2.6:
     resolution: {integrity: sha512-ik3ZgC9dY/lYVVM++OISsaYDeg1tb0VtP5uL3ouh1koGOaUMDPpbFIei4JkFimWUFPn90sbMNMXQAIVOlnYKJA==}
@@ -1179,6 +1187,8 @@ snapshots:
       zod: 4.6.2
     transitivePeerDependencies:
       - '@types/react'
+
+  '@wtfalch/utils@0.1.0': {}
 
   aria-hidden@1.2.6:
     dependencies:
