@@ -5,7 +5,7 @@
 -- audit_chain_tail, audit_pending_erasures) could see and touch every
 -- tenant's rows without complication. That same exemption meant a host
 -- that misconfigured its runtime connection as the owner -- not
--- <database>_rt -- got no tenant isolation at all, silently: read.ts's own
+-- the runtime role -- got no tenant isolation at all, silently: read.ts's own
 -- doc comment claimed RLS backed the tenant filter "even if" a predicate
 -- slipped, which was false for exactly that connection.
 --
@@ -18,8 +18,8 @@
 -- does newly require is an UPDATE policy: audit_erase_person and
 -- audit_seal_erasure both run `update audit_events ...` as the owner, and
 -- with FORCE on and no UPDATE policy, that update would be refused by
--- default. The runtime role never reaches this policy either way -- 0001's
--- revoke already took UPDATE off it entirely -- so opening it for an
+-- default. The runtime role never reaches this policy either way -- the
+-- host's `appendOnly` already took UPDATE off it entirely -- so opening it for an
 -- unscoped connection costs that role nothing.
 
 alter table audit_events force row level security;

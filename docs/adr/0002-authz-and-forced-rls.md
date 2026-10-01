@@ -69,3 +69,5 @@ again.
 Breaking for every `page()` caller and for `ledgerReadHandler`'s host: see
 `CHANGELOG.md` 0.7.0, and pin `@wtfalch/authz` per `package-template` ADR
 0016.
+
+**Amended 2026-10-01.** `<database>_rt` above is the runtime role the host now makes with `ensureRuntimeRole` from `@wtfalch/db`; the SQL no longer names it (see package-template ADR 0015, amended the same day, and `packages/audit/README.md`, Install).

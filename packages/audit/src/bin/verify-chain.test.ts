@@ -8,7 +8,8 @@ import { CORE, type TestDb, testDb } from '../test/db.js';
 import { ledgerVocabularyFromCore } from '../vocabulary.js';
 
 /**
- * The command end to end: the built bin against a real Postgres. Needs both
+ * The command end to end: the built bin against a real Postgres, in the
+ * named schema `testDb()` migrated into. Needs both
  * TEST_DATABASE_URL and a build (`pnpm check` builds first), so it is skipped
  * on PGlite and on a bare `vitest run`.
  */
@@ -50,7 +51,7 @@ describe.skipIf(!url || !existsSync(bin))('audit-verify-chain', () => {
   });
 
   it('exits 0 on an intact chain and 1 on a broken one, naming the row', async () => {
-    const ok = run('--database-url', url ?? '');
+    const ok = run('--database-url', url ?? '', '--schema', t.schema ?? '');
     expect(ok.status).toBe(0);
     expect(ok.stdout).toContain('audit chain ok: 3 rows');
 
@@ -58,7 +59,7 @@ describe.skipIf(!url || !existsSync(bin))('audit-verify-chain', () => {
     await t.exec(
       "update audit_events set action = 'invoice.refunded' where id = (select min(id) from audit_events)",
     );
-    const broken = run('--database-url', url ?? '');
+    const broken = run('--database-url', url ?? '', '--schema', t.schema ?? '');
     expect(broken.status).toBe(1);
     expect(broken.stderr).toContain('audit chain BROKEN at row id');
   });
@@ -66,7 +67,7 @@ describe.skipIf(!url || !existsSync(bin))('audit-verify-chain', () => {
   it('exits 3 with a warning when the table has 0 rows', async () => {
     await t.exec('alter table audit_events disable trigger all');
     await t.exec('delete from audit_events');
-    const empty = spawnSync('node', [bin], {
+    const empty = spawnSync('node', [bin, '--schema', t.schema ?? ''], {
       encoding: 'utf8',
       env: { ...process.env, DATABASE_URL: url ?? '' },
     });
@@ -77,6 +78,7 @@ describe.skipIf(!url || !existsSync(bin))('audit-verify-chain', () => {
   it('exits 2 on bad arguments', () => {
     expect(run('--nope').status).toBe(2);
     expect(run('--database-url').status).toBe(2);
+    expect(run('--database-url', url ?? '', '--schema', '').status).toBe(2);
     expect(run('--database-url', url ?? '', '--head', '').status).toBe(2);
   });
 });

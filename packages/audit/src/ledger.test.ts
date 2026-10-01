@@ -498,10 +498,19 @@ describe('erase', () => {
   });
 
   it('refuses an empty subject or pseudonym', async () => {
-    await expect(ledger.erase(t.db, { subject: '', pseudonym: 'x' })).rejects.toThrow(
+    // drizzle-orm 0.44 and later wrap the driver's error in `DrizzleQueryError`;
+    // the SQL function's own message is then on `cause`.
+    const refusal = async (promise: Promise<unknown>) => {
+      const error = await promise.then(
+        () => undefined,
+        (e: unknown) => e as Error & { cause?: Error },
+      );
+      return `${error?.message} ${error?.cause?.message}`;
+    };
+    expect(await refusal(ledger.erase(t.db, { subject: '', pseudonym: 'x' }))).toMatch(
       /subject id is required/,
     );
-    await expect(ledger.erase(t.db, { subject: 'user_ada', pseudonym: '' })).rejects.toThrow(
+    expect(await refusal(ledger.erase(t.db, { subject: 'user_ada', pseudonym: '' }))).toMatch(
       /pseudonym/,
     );
   });

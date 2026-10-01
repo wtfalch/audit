@@ -40,7 +40,7 @@
 -- it and worker_log_chain took on the rows before T255.
 --
 -- audit_seal_erasure(row_id, erasure_hash_value): the runtime role has no
--- UPDATE on audit_events at all (0001's revoke), so ledger.erase()'s
+-- UPDATE on audit_events at all (the host's `appendOnly`), so ledger.erase()'s
 -- pending-erasure sweep -- setting content_salt to null and erasure_hash
 -- once a chain-sealed row has been erased -- needs its own security
 -- definer door back in, the same shape as audit_erase_person's.
@@ -127,7 +127,7 @@ begin
 end
 $$;
 
--- 0001's revoke took update off the runtime role entirely, on purpose:
+-- The runtime role has no update on audit_events at all, on purpose:
 -- audit_erase_person (security definer) is the one door back in. This is
 -- the second one, for exactly one thing: chain-sealing a row
 -- audit_erase_person already erased. It never computes a hash itself --
@@ -139,7 +139,7 @@ create or replace function audit_seal_erasure(row_id bigint, erasure_hash_value 
 returns void
 language plpgsql
 security definer
-set search_path = pg_catalog, public
+set search_path from current
 as $$
 begin
   update audit_events
@@ -152,13 +152,3 @@ begin
 end
 $$;
 revoke all on function audit_seal_erasure(bigint, text) from public;
-
-do $$
-declare
-  rt text := current_database() || '_rt';
-begin
-  if exists (select 1 from pg_roles where rolname = rt) then
-    execute format('grant execute on function audit_seal_erasure(bigint, text) to %I', rt);
-  end if;
-end
-$$;

@@ -32,18 +32,18 @@ importers:
       '@wtfalch/contracts':
         specifier: 0.2.0
         version: 0.2.0
+      '@wtfalch/db':
+        specifier: 0.5.0
+        version: 0.5.0(@electric-sql/pglite@0.5.8)(drizzle-orm@0.39.3(@electric-sql/pglite@0.5.8)(postgres@3.4.9))
       '@wtfalch/design':
         specifier: 0.30.0
         version: 0.30.0(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(zod@4.6.2)
       drizzle-orm:
-        specifier: ^0.39.3
+        specifier: 0.39.3
         version: 0.39.3(@electric-sql/pglite@0.5.8)(postgres@3.4.9)
       jsdom:
         specifier: ^30.0.1
         version: 30.1.1
-      postgres:
-        specifier: ^3.4.5
-        version: 3.4.9
       react:
         specifier: ^19
         version: 19.3.0
@@ -374,6 +374,19 @@ packages:
     resolution: {integrity: sha512-LIcdVxh8eM3FJMCBydTeOIDqNPk8TC/nxvpr/0pHYiVxFDHMatlinoFJ+vaf/tW0J/z7zB1vu+U8okOPPQRzEQ==}
     engines: {node: '>=22.0.0'}
 
+  '@wtfalch/db@0.5.0':
+    resolution: {integrity: sha512-51/FCynMQPohFz2C8GL6cIcElCZr+VfnhAm/1gB+ujV7dvJZkajc7OT++yl5MZVWKaDc8zUYltvNwNHqqEBGEg==}
+    engines: {node: '>=22.0.0'}
+    hasBin: true
+    peerDependencies:
+      '@electric-sql/pglite': '>=0.5.0 <1.0.0'
+      drizzle-orm: '>=0.39.3 <1.0.0'
+    peerDependenciesMeta:
+      '@electric-sql/pglite':
+        optional: true
+      drizzle-orm:
+        optional: true
+
   '@wtfalch/design@0.30.0':
     resolution: {integrity: sha512-iiYiYPhM/aDBRV2jszXS1qsrKUeU1qzxy8slYbjCQM9hft7ZW+HzOQ0U2MHvSuE8i7G4VSZHz0PSC7AK0MSgww==}
     engines: {node: '>=22.0.0'}
@@ -692,6 +705,10 @@ packages:
   postcss@8.5.28:
     resolution: {integrity: sha512-RRuzqDtt5Y9h3quz5hWhK+TPnsmVs6WwSU6LkJMeY4HstUEDuYTG8UJSdawMRzmzAtV+KEoG8N3Qg2qLy5vM/A==}
     engines: {node: ^10 || ^12 || >=14}
+
+  postgres-array@3.0.4:
+    resolution: {integrity: sha512-nAUSGfSDGOaOAEGwqsRY27GPOea7CNipJPOA7lPbdEpx5Kg3qzdP0AaWC5MlhTWV9s4hFX39nomVZ+C4tnGOJQ==}
+    engines: {node: '>=12'}
 
   postgres@3.4.9:
     resolution: {integrity: sha512-GD3qdB0x1z9xgFI6cdRD6xu2Sp2WCOEoe3mtnyB5Ee0XrrL5Pe+e4CCnJrRMnL1zYtRDZmQQVbvOttLnKDLnaw==}
@@ -1166,6 +1183,14 @@ snapshots:
 
   '@wtfalch/contracts@0.2.0': {}
 
+  '@wtfalch/db@0.5.0(@electric-sql/pglite@0.5.8)(drizzle-orm@0.39.3(@electric-sql/pglite@0.5.8)(postgres@3.4.9))':
+    dependencies:
+      postgres: 3.4.9
+      postgres-array: 3.0.4
+    optionalDependencies:
+      '@electric-sql/pglite': 0.5.8
+      drizzle-orm: 0.39.3(@electric-sql/pglite@0.5.8)(postgres@3.4.9)
+
   '@wtfalch/design@0.30.0(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(zod@4.6.2)':
     dependencies:
       '@internationalized/date': 3.12.4
@@ -1353,6 +1378,8 @@ snapshots:
       nanoid: 3.3.19
       picocolors: 1.1.1
       source-map-js: 1.2.1
+
+  postgres-array@3.0.4: {}
 
   postgres@3.4.9: {}
 

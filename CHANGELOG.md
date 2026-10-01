@@ -1,5 +1,125 @@
 # Changelog
 
+## 0.11.0 — unreleased
+
+0.7.0 to 0.10.0 were never released: npm has 0.6.0, and a host moving from it
+takes every Breaking entry below and in 0.7.0, 0.8.0 and 0.9.0.
+
+- **Breaking, the SQL no longer names a role or a schema.** `migrations/0001`
+  to `0006` are edited in place (no database has applied them; package-template
+  ADR 0015 allows that where no consumer has applied a file). The seven
+  `SECURITY DEFINER` functions use `set search_path from current` instead of
+  the literal `pg_catalog, public`, so they find their table in whatever
+  schema the host migrated into. Every `DO` block that computed
+  `<database>_rt` to revoke and grant is deleted. A host that copied the old
+  files with `audit-migrations` and applied them has a database these files
+  would no longer match; recreate it empty, as the estate's databases are in
+  this move.
+- **Breaking, the revokes and grants move to the host.** `ensureRuntimeRole`
+  from `@wtfalch/db` replaces the `<database>_rt` blocks: `appendOnly:
+  ['audit_events']`, `grants` with the four schema-qualified function
+  signatures, and `settings: { 'audit.require_tenant': 'on' }` where wanted.
+  A host that does not pass them has a runtime role that can UPDATE and DELETE
+  the ledger. See "Moving from 0.10".
+- `@wtfalch/audit/migrations-dir` exports `migrationsDir`, the directory of
+  `.sql` files, for `runMigrationSources({ sources: [{ name: 'audit', dir:
+  migrationsDir }] })`. Its own subpath with no imports but `node:url`; the
+  main entry does not export it. `audit-migrations` and
+  `@wtfalch/audit/migrations/*.sql` stay, as the fallback.
+- `audit-verify-chain --schema <name>` verifies a chain in a named schema. The
+  command now connects through `@wtfalch/db` (`createDatabase`, `max: 1`), so
+  the optional `postgres` peer added in 0.10.0 is replaced by an optional
+  `@wtfalch/db` peer, `>=0.5.0 <0.6.0`. It is the one place this package
+  opens a connection.
+- `assertRuntimeRole` stays exported and `createLedger` still runs it, but it
+  is deprecated for a host's boot path: use `assertRuntimeRole` from
+  `@wtfalch/db/runtime-role` with `appendOnly: ['<schema>.audit_events']`.
+  No runtime dependency on `@wtfalch/db` was added for it.
+- `drizzle-orm` peer is `>=0.39.3 <1.0.0` (was `>=0.39.0`); the devDependency
+  is `0.39.3`, the low end. `@wtfalch/db` 0.5.0 is a devDependency (tests).
+- Tests: the fixture applies the migrations with `runMigrationSources`. With
+  `TEST_DATABASE_URL` each test gets a uniquely named schema, dropped after
+  and when setup fails, and `public` is never dropped or touched. A new
+  default-tier test migrates into a named schema and proves the tables are
+  not in `public`. The runtime-role, privilege and FORCE RLS tests log in as a
+  role made by `ensureRuntimeRole`, in a named schema.
+
+### Breaking since 0.6.0, the last release on npm
+
+1. 0.11.0: the two entries above (SQL edited in place; revokes and grants are
+   the host's through `ensureRuntimeRole`).
+2. 0.10.0: new optional peer `postgres`, now superseded by the optional
+   `@wtfalch/db` peer above.
+3. 0.9.0: the `./react` reader needs `@wtfalch/design` `^0.30.0` (was
+   `^0.28.0`).
+4. 0.8.0: `ledgerReadHandler`, `fetchLedgerPage`, `fetchMergedLedgerPage`,
+   `LedgerReadError` and their types moved to `@wtfalch/audit/read`.
+5. 0.7.0: `page()` requires `access` and `resource` and throws
+   `PermissionDeniedError` unless `access.allows('audit:read', resource)`;
+   `@wtfalch/authz` `^0.16.0` is a new peer; `@wtfalch/contracts` `^0.2.0` is a
+   new optional peer; `migrations/0006_force_rls.sql` forces RLS on the table's
+   owner.
+
+### Moving from 0.10
+
+Before, the host copied the SQL and relied on a role named after the database:
+
+```sh
+pnpm exec audit-migrations   # into drizzle/, applied by the host's migrate script
+```
+
+The `DO` blocks revoked `UPDATE, DELETE, TRUNCATE` from `<database>_rt` and
+granted it `EXECUTE` on the functions. In a named schema on a shared database
+they would have found no such role, and done nothing.
+
+After, with the owner credential, once per deploy (full docs:
+https://github.com/wtfalch/audit/blob/main/packages/audit/README.md):
+
+```ts
+import { migrationsDir as auditMigrations } from '@wtfalch/audit/migrations-dir';
+import { runMigrationSources } from '@wtfalch/db/migrate';
+import { ensureRuntimeRole } from '@wtfalch/db/runtime-role';
+
+await runMigrationSources({
+  url: ownerUrl,
+  schema: 'orders',
+  sources: [
+    { name: 'audit', dir: auditMigrations }, // before the host's own
+    { name: 'app', dir: 'drizzle' },
+  ],
+});
+await ensureRuntimeRole({
+  ownerUrl,
+  runtimeUrl,
+  schemas: ['orders'],
+  appendOnly: ['audit_events'],
+  grants: [
+    'orders.audit_erase_person(text, text, text)',
+    'orders.audit_seal_erasure(bigint, text)',
+    'orders.audit_chain_tail()',
+    'orders.audit_pending_erasures()',
+  ],
+  settings: { 'audit.require_tenant': 'on' }, // replaces `alter role <database>_rt set ...`
+});
+```
+
+In the server, the runtime connection's `searchPath` must include the schema,
+and the boot check names the table with its schema:
+
+```ts
+import { createDatabase } from '@wtfalch/db/postgres';
+import { assertRuntimeRole } from '@wtfalch/db/runtime-role';
+
+const connection = createDatabase({ url: () => runtimeUrl, searchPath: ['orders', 'public'] });
+await assertRuntimeRole(connection.database, { appendOnly: ['orders.audit_events'] });
+```
+
+`audit-verify-chain` takes the owner credential and the schema:
+
+```sh
+DATABASE_URL="$DATABASE_URL_OWNER" pnpm exec audit-verify-chain --schema orders
+```
+
 ## 0.10.0 — unreleased
 
 - `audit-verify-chain` command and `verifyTable(handle, options)`: run

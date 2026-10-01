@@ -6,22 +6,24 @@ import { type AuditTable, auditEvents as auditEvents_ } from './tables.js';
 /**
  * Both of this package's runtime guarantees -- `audit_events` is
  * append-only, and (with `migrations/0005_rls.sql` applied) tenant isolation
- * -- depend on the connection being the role `migrations/0001_audit.sql`'s
- * `DO` block found and revoked from: `<database>_rt`. Neither migration can
- * see what role a given deployment's connection string will actually
- * resolve to, so a host that connects as the table's owner, as a superuser,
- * or as any role that migration never touched gets neither guarantee, with
- * no error anywhere -- README.md's "An app that connects as the table's
- * owner gets no RLS at all" names the exact failure this closes for real,
- * at startup, instead of leaving it to be discovered later.
+ * -- depend on the connection being the runtime role the host made with
+ * `ensureRuntimeRole` from `@wtfalch/db`, listing `audit_events` in
+ * `appendOnly`. No migration can see what role a given deployment's
+ * connection string will actually resolve to, so a host that connects as
+ * the table's owner, as a superuser, or as any role `ensureRuntimeRole` never
+ * touched gets neither guarantee, with no error anywhere -- README.md's "An
+ * app that connects as the table's owner gets no RLS at all" names the exact
+ * failure this closes for real, at startup, instead of leaving it to be
+ * discovered later.
  *
  * `createLedger` (`ledger.ts`) calls this itself, once per handle it is
  * given, before `sign`/`page`/`erase`/`exportRows` touch the table --
  * `LedgerOptions.checkRuntimeRole` (on by default) is the switch. It stays
- * exported too, for a host that wants to fail closed before `createLedger`
- * is even reachable (its own boot path, mirroring `@wtfalch/tasks`'s
- * `apps/host/src/lib/runtime-role-guard.ts`), or that checks a handle this
- * package's ledger never sees.
+ * exported too, but a host's boot path should call `assertRuntimeRole` from
+ * `@wtfalch/db/runtime-role` with `appendOnly: ['<schema>.audit_events']`
+ * instead: it also refuses a role that owns objects or belongs to a role that
+ * does. This copy stays so the package needs no runtime dependency on
+ * `@wtfalch/db`, and so `createLedger` keeps its own per-handle check.
  */
 export class UnsafeRuntimeRoleError extends Error {
   constructor(message: string) {
@@ -46,8 +48,13 @@ interface PrivilegeRow {
  * never a name anyone configured it to have -- and throws
  * `UnsafeRuntimeRoleError` if it can bypass row-level security (superuser or
  * BYPASSRLS) or still holds UPDATE, DELETE or TRUNCATE on `table` (the
- * table's owner, or a role the estate's migration never revoked those
- * from). Resolves without a value when the role is safe.
+ * table's owner, or a role `ensureRuntimeRole` never listed `appendOnly`
+ * for). Resolves without a value when the role is safe. Unqualified
+ * `table` names resolve through the connection's `search_path`, so the host's
+ * runtime `searchPath` must include the schema.
+ *
+ * @deprecated for a host's boot path; use `assertRuntimeRole` from
+ * `@wtfalch/db/runtime-role`. `createLedger` still runs this one itself.
  */
 export async function assertRuntimeRole(
   handle: Handle,
@@ -90,7 +97,7 @@ export async function assertRuntimeRole(
   if (offending.length > 0) {
     const verbs = offending.map((key) => key.slice('can_'.length).toUpperCase());
     throw new UnsafeRuntimeRoleError(
-      `audit: the connected role still has ${verbs.join(', ')} on "${tableName}": it is not the role migrations/0001_audit.sql's revoke ran against, so audit_events is not append-only for it`,
+      `audit: the connected role still has ${verbs.join(', ')} on "${tableName}": it is not the role ensureRuntimeRole made with appendOnly: ['audit_events'], so audit_events is not append-only for it`,
     );
   }
 }

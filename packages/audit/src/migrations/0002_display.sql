@@ -96,7 +96,7 @@ create or replace function audit_erase_person(subject text, pseudonym text, subj
 returns integer
 language plpgsql
 security definer
-set search_path = pg_catalog, public
+set search_path from current
 as $$
 declare
   touched integer;
@@ -128,14 +128,3 @@ end
 $$;
 
 revoke all on function audit_erase_person(text, text, text) from public;
-
-do $$
-declare
-  rt text := current_database() || '_rt';
-begin
-  if exists (select 1 from pg_roles where rolname = rt) then
-    execute format('revoke update, delete, truncate on audit_events from %I', rt);
-    execute format('grant execute on function audit_erase_person(text, text, text) to %I', rt);
-  end if;
-end
-$$;

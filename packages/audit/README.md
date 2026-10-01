@@ -19,7 +19,7 @@ still never leaves the host that built it.
 | Concern | Where |
 | --- | --- |
 | Column bounds, JSON size, `namespace.name` action shape, subject pair, break-glass shape | `migrations/0001_audit.sql` CHECKs, and `rowSchema` before the insert |
-| Append-only: no DELETE, no TRUNCATE, UPDATE limited to what erasure touches | `audit_events_guard` trigger, plus a revoke from `<database>_rt`; `createLedger` runs `assertRuntimeRole` on first use to check the revoke actually landed on the connected role |
+| Append-only: no DELETE, no TRUNCATE, UPDATE limited to what erasure touches | `audit_events_guard` trigger, plus the host's `appendOnly: ['audit_events']` in `ensureRuntimeRole` (below); `createLedger` runs `assertRuntimeRole` on first use to check the revoke actually landed on the connected role |
 | The closed sets: which events, actor classes, contexts, outcomes, reason codes | `LedgerVocabulary` in TypeScript at write time; the host's own CHECKs in the database when it has them |
 | Who may sign what | The host. The package checks no permission and reads no session |
 | Tenant visibility | Decided per event in the vocabulary, never per write |
@@ -28,12 +28,66 @@ still never leaves the host that built it.
 ## Install
 
 ```sh
-pnpm add @wtfalch/audit
-pnpm exec audit-migrations   # copies migrations/*.sql into drizzle/ as the next numbers
+pnpm add @wtfalch/audit @wtfalch/db
 ```
 
-The copy is recorded in `drizzle/.audit-migrations.json`; running it again
-copies nothing. Apply the copied file with the host's own migrate script.
+The package ships SQL and never connects or migrates. The host installs
+`@wtfalch/db` (this package declares it only as an optional peer, for the
+`audit-verify-chain` command), applies the SQL with the owner credential into
+a schema of its own, then makes the runtime role. The runtime `searchPath`
+and `ensureRuntimeRole({ schemas })` must both cover that schema.
+
+```ts
+import { migrationsDir as auditMigrations } from '@wtfalch/audit/migrations-dir';
+import { createDatabase } from '@wtfalch/db/postgres';
+import { runMigrationSources } from '@wtfalch/db/migrate';
+import { assertRuntimeRole, ensureRuntimeRole } from '@wtfalch/db/runtime-role';
+
+const ownerUrl = process.env.DATABASE_URL_OWNER;
+const runtimeUrl = process.env.DATABASE_URL;
+if (!ownerUrl || !runtimeUrl) throw new Error('DATABASE_URL_OWNER and DATABASE_URL are required');
+
+await runMigrationSources({
+  url: ownerUrl,
+  schema: 'orders', // created if missing; the ledger lands here, never in public
+  sources: [
+    { name: 'audit', dir: auditMigrations }, // before the host's own, which may add CHECKs to audit_events
+    { name: 'app', dir: 'drizzle' },
+  ],
+});
+
+await ensureRuntimeRole({
+  ownerUrl,
+  runtimeUrl,
+  schemas: ['orders'],
+  appendOnly: ['audit_events'], // insert and read only: UPDATE, DELETE and TRUNCATE revoked
+  grants: [ // the four security definer functions, schema-qualified
+    'orders.audit_erase_person(text, text, text)',
+    'orders.audit_seal_erasure(bigint, text)',
+    'orders.audit_chain_tail()',
+    'orders.audit_pending_erasures()',
+  ],
+  settings: { 'audit.require_tenant': 'on' }, // optional: an unscoped read sees nothing
+});
+
+const connection = createDatabase({
+  url: () => runtimeUrl,
+  searchPath: ['orders', 'public'], // `audit_events` resolves in `orders`
+});
+await assertRuntimeRole(connection.database, { appendOnly: ['orders.audit_events'] });
+```
+
+Run `ensureRuntimeRole` after every migration run: the lists apply to the
+tables that exist at that moment. `grants` entries are spliced into SQL, so
+they are trusted text. Call `assertRuntimeRole` from `@wtfalch/db/runtime-role`
+once at boot, as above; it names the table as `schema.table`, and it also
+refuses a role that owns objects.
+
+Without `@wtfalch/db`, `audit-migrations` still copies `migrations/*.sql`
+into `drizzle/` as the next numbers (recorded in
+`drizzle/.audit-migrations.json`; running it again copies nothing), and the
+host applies them itself. Prefer `runMigrationSources`: the copy path has no
+schema and no runtime-role step, so the host must grant and revoke by hand.
 
 ## Use
 
@@ -163,7 +217,7 @@ The database is the one thing the package cannot supply.
 `migrations/0006_force_rls.sql` forces it: a read inside a tenant-scoped
 transaction sees that tenant's rows and nothing else, whatever predicate the
 query forgot, for every role -- including the table's owner, not just
-`<database>_rt`. Only an actual Postgres superuser bypasses RLS regardless of
+the runtime role. Only an actual Postgres superuser bypasses RLS regardless of
 FORCE, and a host's runtime connection should never be one.
 
 ```ts
@@ -177,19 +231,19 @@ await db.transaction(async (tx) => {
 
 Unscoped reads still see every row, so applying the migration changes nothing
 until the host scopes. To make a forgotten scope see nothing instead, set it
-on the role the app connects as:
+on the role the app connects as, through `ensureRuntimeRole` (above):
 
-```sql
-alter role <database>_rt set audit.require_tenant = 'on';
+```ts
+settings: { 'audit.require_tenant': 'on' }
 ```
 
 An operator surface that reads across tenants then connects as another role.
 Which role that is belongs to the host.
 
-Neither that nor the append-only revoke above was enforced at runtime by
-this package before `assertRuntimeRole`: both depend on the connection
-being named exactly `<database>_rt`, and no migration can see what role a
-given deployment's connection string will actually resolve to. It throws
+Neither that nor the append-only revoke above is enforced by this package's
+SQL: both depend on the connection being the role `ensureRuntimeRole` made,
+and no migration can see what role a given deployment's connection string
+will actually resolve to. The package's own `assertRuntimeRole` throws
 `UnsafeRuntimeRoleError` if the connected role can bypass row-level security
 (superuser or BYPASSRLS) or still holds UPDATE, DELETE or TRUNCATE on
 `audit_events`.
@@ -199,7 +253,7 @@ handle any of `sign`/`page`/`erase`/`exportRows` is called with, once, and
 fails closed before that call -- and every one after, on the same handle --
 touches the table if the role is unsafe. This is on by default
 (`LedgerOptions.checkRuntimeRole`); turn it off for a connection that is
-deliberately broader than `<database>_rt`, such as a test run against a
+deliberately broader than the runtime role, such as a test run against a
 superuser fixture:
 
 ```ts
@@ -211,7 +265,7 @@ call and not on a timer. A handle a host holds for a long time -- a pooled
 connection, a client built once at module scope -- is checked once for as
 long as the host keeps using that same handle object, which can be the
 whole process lifetime; a role change made afterward (a revoked grant, a
-rotated `<database>_rt`) is not picked up on that handle. To have a role
+rotated runtime role) is not picked up on that handle. To have a role
 change take effect, give the ledger a handle it has not seen before -- pass
 a fresh transaction handle per request, which is the usual shape for a web
 host -- or restart the process. If your own tests run against a superuser
@@ -220,16 +274,17 @@ connection -- PGlite is one, and so is a local Postgres reached as
 tests, the same way this package's own PGlite-backed tests do; the check
 throws on a superuser connection by design.
 
-`assertRuntimeRole` also stays exported, for a host that wants the same
-check on a connection this package's ledger never sees, or that wants to
-fail before `createLedger` is even reachable -- its own boot path, the way
-`@wtfalch/tasks`'s `apps/host/src/lib/runtime-role-guard.ts` does for that
-package's tables:
+`assertRuntimeRole` also stays exported, but is deprecated for a host's boot
+path: call `assertRuntimeRole` from `@wtfalch/db/runtime-role` there, as in
+Install above. It is kept so this package needs no runtime dependency on
+`@wtfalch/db`, and because `createLedger` runs it. Its table name resolves
+through the connection's `search_path`, so the runtime `searchPath` must
+include the schema:
 
 ```ts
 import { assertRuntimeRole } from '@wtfalch/audit';
 
-await assertRuntimeRole(db); // throws if the connection is not the `_rt` role, or one shaped like it
+await assertRuntimeRole(db); // throws if the connection can bypass RLS or update, delete or truncate audit_events
 ```
 
 With `hashChain` on, `sign()` and `erase()` now read the chain tail and the
@@ -243,7 +298,7 @@ both added in 0005. Apply 0005 before deploying this version.
 `verifyChain` over it:
 
 ```sh
-DATABASE_URL="$ADMIN_DATABASE_URL" pnpm exec audit-verify-chain
+DATABASE_URL="$ADMIN_DATABASE_URL" pnpm exec audit-verify-chain --schema orders
 ```
 
 It exits 0 when the chain holds, 1 when it does not (printing the first bad
@@ -253,7 +308,9 @@ reads 0 rows under row-level security). Give the URL as `DATABASE_URL`, not
 `--database-url`, so the password stays out of the process list. Connect as the
 table's owner or an admin role, not the runtime role: row-level security
 hides other tenants' rows from that role and the chain would look broken.
-It needs the `postgres` package installed (an optional peer).
+It needs `@wtfalch/db` installed (an optional peer), the one place this
+package opens a connection. `--schema <name>` is the schema the host migrated
+into; without it the connection's own `search_path` applies.
 
 - `--after-id <n>` skips rows up to an id, for a table whose early rows
   were written before `hashChain` was on and report `unsealed`.
@@ -426,11 +483,12 @@ policy are one decision per enterprise customer, not the package's.
 
 ```sh
 pnpm test                                        # PGlite, in memory
-TEST_DATABASE_URL=postgres://... pnpm test       # a real Postgres; drops its public schema first
+TEST_DATABASE_URL=postgres://... pnpm test       # a real Postgres; one uniquely named schema per test, dropped after
 ```
 
-The real run adds the runtime-role test: `<database>_rt` may insert and
-call `audit_erase_person`, and may not update, delete or truncate.
+The real run never touches `public`. It adds the runtime-role tests: a role
+made by `ensureRuntimeRole` with the lists above may insert and call
+`audit_erase_person`, and may not update, delete or truncate.
 
 ## Release
 

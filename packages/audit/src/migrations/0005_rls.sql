@@ -8,8 +8,8 @@
 -- Until this file, tenant isolation was only the `tenantId` a caller
 -- remembered to pass to ledger.page(). One missed predicate showed a
 -- customer another company's trail. With RLS on, the database holds the
--- line for every role that is not the table's owner -- the runtime role
--- <database>_rt, and any read-only role a host adds:
+-- line for every role that is not the table's owner -- the runtime role,
+-- and any read-only role a host adds:
 --
 --   audit.tenant_id       -- set per transaction by the host
 --                            (scopeAuditTenant, or
@@ -18,8 +18,9 @@
 --                            nothing else -- not another tenant's, and not
 --                            the estate's own tenant_id-null rows.
 --   audit.require_tenant  -- 'on' makes an unscoped SELECT see nothing
---                            instead of everything. Set it on a role, once:
---                              alter role <database>_rt set audit.require_tenant = 'on';
+--                            instead of everything. Set it on the runtime
+--                            role, once: `settings: { 'audit.require_tenant': 'on' }`
+--                            in the host's ensureRuntimeRole call.
 --                            That is the setting that survives a forgotten
 --                            scope. It is not set here because an operator
 --                            surface reads across tenants on purpose, and
@@ -31,8 +32,8 @@
 -- INSERT is not restricted: a request scoped to one tenant may still record
 -- an estate-level (tenant_id null) event, and the ledger's own vocabulary
 -- checks already decide what may be written. UPDATE and DELETE have no
--- policy, so they stay refused for the runtime role -- which 0001's revoke
--- already did.
+-- policy, so they stay refused for the runtime role -- which the host's
+-- `appendOnly` already did.
 --
 -- Not FORCE: the owner, and the security definer functions it owns
 -- (audit_erase_person, audit_seal_erasure, and the two below), bypass RLS.
@@ -68,7 +69,7 @@ returns text
 language sql
 stable
 security definer
-set search_path = pg_catalog, public
+set search_path from current
 as $$
   select row_hash from audit_events order by id desc limit 1
 $$;
@@ -82,7 +83,7 @@ returns table (id bigint, row_hash text, erased_at timestamptz)
 language sql
 stable
 security definer
-set search_path = pg_catalog, public
+set search_path from current
 as $$
   select e.id, e.row_hash, e.erased_at
     from audit_events e
@@ -92,14 +93,3 @@ as $$
    order by e.id
 $$;
 revoke all on function audit_pending_erasures() from public;
-
-do $$
-declare
-  rt text := current_database() || '_rt';
-begin
-  if exists (select 1 from pg_roles where rolname = rt) then
-    execute format('grant execute on function audit_chain_tail() to %I', rt);
-    execute format('grant execute on function audit_pending_erasures() to %I', rt);
-  end if;
-end
-$$;

@@ -7,7 +7,8 @@
 -- What this file enforces is the ledger's SHAPE and its WALLS: bounded
 -- columns, JSON under 64 KB, the pairs that must appear together, the
 -- break-glass rule that a session row carries its session, reason and
--- reference, and the three triggers plus the runtime-role revoke that make
+-- reference, and the three triggers plus the runtime role's missing UPDATE,
+-- DELETE and TRUNCATE (the host's `appendOnly`) that make
 -- "append-only" true for a role that is not a superuser. The CLOSED SETS
 -- (which event names, actor classes, contexts, outcomes and reason codes a
 -- host admits) are the host's own vocabulary: enforced in TypeScript by the
@@ -15,9 +16,10 @@
 -- has them (wtfalch/app-template's 0003 and 0007 do). A host with only this
 -- file gets the shape and the walls.
 --
--- Estate-shaped: the DO block assumes a runtime role named <database>_rt that
--- owns nothing and serves the app. Without it, the tables and the function
--- exist and no revoke takes effect.
+-- The runtime role is the host's: it creates it with ensureRuntimeRole from
+-- @wtfalch/db, listing `audit_events` in `appendOnly` (insert and read only)
+-- and the four security definer functions these files create in `grants`.
+-- Nothing here names a role.
 --
 -- No foreign keys, on purpose: the trail outlives the tenant, the person and
 -- the credential it describes. `tenant_id` is a uuid because the estate's
@@ -92,7 +94,7 @@ create index if not exists audit_events_subject_time_idx
 create index if not exists audit_events_request_idx
   on audit_events (request_id, occurred_at desc) where request_id is not null;
 
--- The second wall. The first is the revoke below, which stops the server; this
+-- The second wall. The first is the host's `appendOnly`, which stops the server; this
 -- stops the owner's own mistakes at a psql prompt. An UPDATE may change only
 -- the four columns erasure touches, and DELETE and TRUNCATE are refused
 -- outright. audit_erase_person passes through this trigger, not around it.
@@ -156,7 +158,7 @@ create or replace function audit_erase_person(subject text, pseudonym text, subj
 returns integer
 language plpgsql
 security definer
-set search_path = pg_catalog, public
+set search_path from current
 as $$
 declare
   touched integer;
@@ -190,14 +192,3 @@ begin
 end
 $$;
 revoke all on function audit_erase_person(text, text, text) from public;
-
-do $$
-declare
-  rt text := current_database() || '_rt';
-begin
-  if exists (select 1 from pg_roles where rolname = rt) then
-    execute format('revoke update, delete, truncate on audit_events from %I', rt);
-    execute format('grant execute on function audit_erase_person(text, text, text) to %I', rt);
-  end if;
-end
-$$;
