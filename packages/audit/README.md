@@ -266,6 +266,51 @@ page on a non-zero exit. The same check is `verifyTable(handle, options)`
 from the root entry, for a host that would rather call it from its own job.
 The scheduling is the host's; this package ships no framework for it.
 
+### Anchoring the head outside the database
+
+The chain alone cannot catch a rewrite by someone who can write the table (a
+superuser, a disabled trigger, a restored backup). They change a row and
+reseal every later row exactly as `sealRow` does, and `audit-verify-chain`
+still exits 0. The one thing they cannot forge is a head you saved before the
+rewrite. So after each clean run, the host saves the printed head to storage
+the database role cannot write: another host, a bucket with object lock, or
+an append-only log service. Keep every head, never overwrite one.
+
+```sh
+#!/bin/sh
+# ANCHOR is a file on storage the database role cannot write, one head per line.
+set -eu
+OUT=$(DATABASE_URL="$ADMIN_DATABASE_URL" pnpm exec audit-verify-chain)
+echo "$OUT"
+HEAD=$(echo "$OUT" | sed -n 's/.*head \([0-9a-f]\{64\}\)$/\1/p')
+test -n "$HEAD"
+echo "$HEAD" >> "$ANCHOR"
+```
+
+`set -e` stops the script on any non-zero exit, so a broken chain (exit 1) or
+an empty or hidden table (exit 3) is never anchored. `test -n` stops it when
+no head was printed. Page on any failure. On an object-lock bucket, write each
+head as its own object instead of appending to one file.
+
+To check against an anchor, pass it as `--head`. It must equal the newest
+row's `row_hash`, so use it when no row was written since the anchor was
+taken (right after the run, a write freeze, or an incident check on a
+restored copy):
+
+```sh
+DATABASE_URL="$ADMIN_DATABASE_URL" pnpm exec audit-verify-chain --head "$(tail -n 1 "$ANCHOR")"
+```
+
+A rewrite that reseals forward changes every `row_hash` from the edited row
+on, so exit 1 with reason `head` means the chain no longer ends where you
+anchored it. On a ledger still taking writes, the newest row has moved on, so
+check instead that each anchored head is still a stored `row_hash`; a missing
+one means a rewrite or a deletion:
+
+```sql
+select count(*) from audit_events where row_hash = '<anchored head>';  -- 1 expected
+```
+
 ## Reading across apps
 
 The ledger stays per app (see "A service with no tenant database" and

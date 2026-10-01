@@ -134,6 +134,36 @@ describe('sealRow / verifyChain round trip', () => {
       reason: 'head',
     });
   });
+
+  it('a rewrite resealed forward passes verifyChain alone, and is caught by the exported head', async () => {
+    const inputs = [1, 2, 3].map((n) => ({ ...input, target_id: `i_${n}` }));
+    const seal = async (list: readonly SealInput[]) => {
+      const rows: AuditEventRow[] = [];
+      let prev: string | null = null;
+      for (const [i, item] of list.entries()) {
+        const sealed = await sealRow(item, prev);
+        rows.push(toEventRow(i + 1, item, sealed));
+        prev = sealed.row_hash;
+      }
+      return rows;
+    };
+    const original = await seal(inputs);
+    const exportedHead = original[2]?.rowHash ?? '';
+
+    // A privileged actor rewrites row 1 and recomputes every later row exactly as sealRow would.
+    const rewritten = await seal(
+      inputs.map((item, i) => (i === 0 ? { ...item, after: { amount: 1 } } : item)),
+    );
+
+    expect(await verifyChain(rewritten)).toEqual({ ok: true });
+    expect(rewritten[2]?.rowHash).not.toBe(exportedHead);
+    expect(await verifyChain(rewritten, { head: exportedHead })).toEqual({
+      ok: false,
+      index: 2,
+      reason: 'head',
+    });
+    expect(await verifyChain(original, { head: exportedHead })).toEqual({ ok: true });
+  });
 });
 
 describe('erasure', () => {
