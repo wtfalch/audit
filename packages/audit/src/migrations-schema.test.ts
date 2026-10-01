@@ -35,8 +35,9 @@ describe('migrations in a named schema', () => {
         order by 1`,
     );
     expect(functions.rows.map((row) => row.schema)).toEqual(['svc', 'svc', 'svc', 'svc']);
-    // Pinned to the schema the migration ran in, which is what lets a security definer find its table.
-    for (const row of functions.rows) expect(row.proconfig).toEqual(['search_path=svc, public']);
+    // Pinned to the schema the migration ran in (db 0.5.2 puts pg_temp last), which is what lets a security definer find its table.
+    for (const row of functions.rows)
+      expect(row.proconfig).toEqual(['search_path=svc, public, pg_temp']);
 
     // The runner restores the owner's search_path; a runtime connection sets its own.
     await pglite.exec('set search_path to svc');

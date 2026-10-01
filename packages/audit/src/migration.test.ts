@@ -40,8 +40,12 @@ describe('the migrations', () => {
       );
       expect(fn?.prosecdef).toBe(true);
       // `set search_path from current`: whatever the migrating connection used, never a literal `public`.
+      // The runner appends `pg_temp` (db 0.5.2), which `show` on a plain connection omits.
       const [path] = await t.query('show search_path');
-      const squash = (text: unknown) => String(text).replaceAll(' ', '');
+      const squash = (text: unknown) =>
+        String(text)
+          .replaceAll(' ', '')
+          .replace(/,pg_temp$/, '');
       expect((fn?.proconfig as string[]).map(squash)).toEqual([
         squash(`search_path=${path?.search_path}`),
       ]);

@@ -28,11 +28,11 @@ still never leaves the host that built it.
 ## Install
 
 ```sh
-pnpm add @wtfalch/audit @wtfalch/db
+pnpm add @wtfalch/audit @wtfalch/db@0.5.2
 ```
 
 The package ships SQL and never connects or migrates. The host installs
-`@wtfalch/db` (this package declares it only as an optional peer, for the
+`@wtfalch/db` 0.5.2 or later (this package declares it only as an optional peer, for the
 `audit-verify-chain` command), applies the SQL with the owner credential into
 a schema of its own, then makes the runtime role. The runtime `searchPath`
 and `ensureRuntimeRole({ schemas })` must both cover that schema.
@@ -67,7 +67,7 @@ await ensureRuntimeRole({
     'orders.audit_chain_tail()',
     'orders.audit_pending_erasures()',
   ],
-  settings: { 'audit.require_tenant': 'on' }, // optional: an unscoped read sees nothing
+  settings: { 'audit.require_tenant': 'on' }, // without it an unscoped read sees every tenant's rows
 });
 
 const connection = createDatabase({
@@ -76,6 +76,12 @@ const connection = createDatabase({
 });
 await assertRuntimeRole(connection.database, { appendOnly: ['orders.audit_events'] });
 ```
+
+Set `'audit.require_tenant': 'on'` on any multi-tenant host: without it a read
+that forgot `scopeAuditTenant` sees every tenant's rows. Migrate with
+`@wtfalch/db` 0.5.2 or later: earlier runners left `pg_temp` off the path the
+functions freeze, so the runtime role's own temp table could shadow
+`audit_events` inside them.
 
 Run `ensureRuntimeRole` after every migration run: the lists apply to the
 tables that exist at that moment. `grants` entries are spliced into SQL, so

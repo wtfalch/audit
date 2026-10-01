@@ -6,15 +6,19 @@
 takes every Breaking entry below and in 0.7.0, 0.8.0 and 0.9.0.
 
 - **Breaking, the SQL no longer names a role or a schema.** `migrations/0001`
-  to `0006` are edited in place (no database has applied them; package-template
-  ADR 0015 allows that where no consumer has applied a file). The seven
+  to `0006` are edited in place under package-template ADR 0015 as amended,
+  because every estate database is recreated empty in this move. npm 0.6.0
+  shipped 0001 to 0005, so a database that applied those files must be
+  recreated. The seven
   `SECURITY DEFINER` functions use `set search_path from current` instead of
   the literal `pg_catalog, public`, so they find their table in whatever
   schema the host migrated into. Every `DO` block that computed
-  `<database>_rt` to revoke and grant is deleted. A host that copied the old
-  files with `audit-migrations` and applied them has a database these files
-  would no longer match; recreate it empty, as the estate's databases are in
-  this move.
+  `<database>_rt` to revoke and grant is deleted.
+- **Hosts migrate with `@wtfalch/db` 0.5.2 or later.** Before 0.5.2 the runner's
+  `search_path` had no `pg_temp`, so `set search_path from current` froze a
+  path on which PostgreSQL searches temp objects first, and a runtime role's
+  temp table named `audit_events` shadowed the function's table. 0.5.2
+  migrates with `<schema>, public, pg_temp`, which closes that.
 - **Breaking, the revokes and grants move to the host.** `ensureRuntimeRole`
   from `@wtfalch/db` replaces the `<database>_rt` blocks: `appendOnly:
   ['audit_events']`, `grants` with the four schema-qualified function
@@ -29,14 +33,14 @@ takes every Breaking entry below and in 0.7.0, 0.8.0 and 0.9.0.
 - `audit-verify-chain --schema <name>` verifies a chain in a named schema. The
   command now connects through `@wtfalch/db` (`createDatabase`, `max: 1`), so
   the optional `postgres` peer added in 0.10.0 is replaced by an optional
-  `@wtfalch/db` peer, `>=0.5.0 <0.6.0`. It is the one place this package
+  `@wtfalch/db` peer, `>=0.5.2 <0.6.0`. It is the one place this package
   opens a connection.
 - `assertRuntimeRole` stays exported and `createLedger` still runs it, but it
   is deprecated for a host's boot path: use `assertRuntimeRole` from
   `@wtfalch/db/runtime-role` with `appendOnly: ['<schema>.audit_events']`.
   No runtime dependency on `@wtfalch/db` was added for it.
 - `drizzle-orm` peer is `>=0.39.3 <1.0.0` (was `>=0.39.0`); the devDependency
-  is `0.39.3`, the low end. `@wtfalch/db` 0.5.0 is a devDependency (tests).
+  is `0.39.3`, the low end. `@wtfalch/db` 0.5.2 is a devDependency (tests).
 - Tests: the fixture applies the migrations with `runMigrationSources`. With
   `TEST_DATABASE_URL` each test gets a uniquely named schema, dropped after
   and when setup fails, and `public` is never dropped or touched. A new
@@ -53,7 +57,8 @@ takes every Breaking entry below and in 0.7.0, 0.8.0 and 0.9.0.
 3. 0.9.0: the `./react` reader needs `@wtfalch/design` `^0.30.0` (was
    `^0.28.0`).
 4. 0.8.0: `ledgerReadHandler`, `fetchLedgerPage`, `fetchMergedLedgerPage`,
-   `LedgerReadError` and their types moved to `@wtfalch/audit/read`.
+   `LedgerReadError` and their types are only at `@wtfalch/audit/read`; 0.6.0
+   never had them in the main entry (0.7.0 added them there, 0.8.0 moved them).
 5. 0.7.0: `page()` requires `access` and `resource` and throws
    `PermissionDeniedError` unless `access.allows('audit:read', resource)`;
    `@wtfalch/authz` `^0.16.0` is a new peer; `@wtfalch/contracts` `^0.2.0` is a

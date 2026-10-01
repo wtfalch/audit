@@ -34,6 +34,15 @@ describe.skipIf(!url)('assertRuntimeRole', () => {
     await expect(assertRuntimeRole(t.runtimeDb)).rejects.toThrow(UnsafeRuntimeRoleError);
   });
 
+  // One privilege at a time: a guard that ignores any single verb must fail here.
+  it.each(['delete', 'truncate'])('throws for a role holding only %s', async (verb) => {
+    if (!url) return;
+    t = await withRuntimeRole(url);
+    // appendOnly revoked UPDATE, DELETE and TRUNCATE; give back exactly one.
+    await t.owner.database.query(`grant ${verb} on audit_events to "${t.role}"`);
+    await expect(assertRuntimeRole(t.runtimeDb)).rejects.toThrow(UnsafeRuntimeRoleError);
+  });
+
   it('resolves for the role ensureRuntimeRole made with appendOnly: audit_events', async () => {
     if (!url) return;
     t = await withRuntimeRole(url);

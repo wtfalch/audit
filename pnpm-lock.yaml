@@ -33,8 +33,8 @@ importers:
         specifier: 0.2.0
         version: 0.2.0
       '@wtfalch/db':
-        specifier: 0.5.0
-        version: 0.5.0(@electric-sql/pglite@0.5.8)(drizzle-orm@0.39.3(@electric-sql/pglite@0.5.8)(postgres@3.4.9))
+        specifier: 0.5.2
+        version: 0.5.2(@electric-sql/pglite@0.5.8)(drizzle-orm@0.39.3(@electric-sql/pglite@0.5.8)(postgres@3.4.9))
       '@wtfalch/design':
         specifier: 0.30.0
         version: 0.30.0(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(zod@4.6.2)
@@ -374,8 +374,8 @@ packages:
     resolution: {integrity: sha512-LIcdVxh8eM3FJMCBydTeOIDqNPk8TC/nxvpr/0pHYiVxFDHMatlinoFJ+vaf/tW0J/z7zB1vu+U8okOPPQRzEQ==}
     engines: {node: '>=22.0.0'}
 
-  '@wtfalch/db@0.5.0':
-    resolution: {integrity: sha512-51/FCynMQPohFz2C8GL6cIcElCZr+VfnhAm/1gB+ujV7dvJZkajc7OT++yl5MZVWKaDc8zUYltvNwNHqqEBGEg==}
+  '@wtfalch/db@0.5.2':
+    resolution: {integrity: sha512-n4usvhe790mIovf6qV/Qsnq+mueLd4avKaw4S5OOWGlLh0KTDHJLa7o9Gkzueb3km0xnTKS+Y4Lm0jGn92A+PA==}
     engines: {node: '>=22.0.0'}
     hasBin: true
     peerDependencies:
@@ -1183,7 +1183,7 @@ snapshots:
 
   '@wtfalch/contracts@0.2.0': {}
 
-  '@wtfalch/db@0.5.0(@electric-sql/pglite@0.5.8)(drizzle-orm@0.39.3(@electric-sql/pglite@0.5.8)(postgres@3.4.9))':
+  '@wtfalch/db@0.5.2(@electric-sql/pglite@0.5.8)(drizzle-orm@0.39.3(@electric-sql/pglite@0.5.8)(postgres@3.4.9))':
     dependencies:
       postgres: 3.4.9
       postgres-array: 3.0.4

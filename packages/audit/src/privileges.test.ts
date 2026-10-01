@@ -68,4 +68,46 @@ describe.skipIf(!url)('runtime role', () => {
     const [row] = await asRt(t, 'select content_salt, erasure_hash from audit_events');
     expect(row).toMatchObject({ content_salt: null, erasure_hash: hash64('f') });
   });
+
+  // db 0.5.2 migrates with `<schema>, public, pg_temp`. Before that, a
+  // `set search_path from current` function froze a path without pg_temp, so a
+  // temp table of the runtime role shadowed the function's table.
+  it('freezes pg_temp last on every security definer function in the schema', async () => {
+    if (!url) return;
+    t = await withRuntimeRole(url);
+    const rows = await t.owner.database.query<{ proname: string; proconfig: string[] | null }>(
+      `select proname, proconfig from pg_proc
+        where prosecdef and pronamespace = '${t.schema}'::regnamespace order by 1`,
+    );
+    expect(rows.map((row) => row.proname)).toEqual([
+      'audit_chain_tail',
+      'audit_erase_person',
+      'audit_pending_erasures',
+      'audit_seal_erasure',
+    ]);
+    for (const row of rows) {
+      const path = (row.proconfig ?? []).find((entry) => entry.startsWith('search_path='));
+      expect(path?.split(',').at(-1)?.trim(), row.proname).toBe('pg_temp');
+    }
+  });
+
+  it("is not shadowed by the runtime role's own temp table", async () => {
+    if (!url) return;
+    t = await withRuntimeRole(url);
+    const hash64 = (c: string) => c.repeat(64);
+    await asRt(
+      t,
+      `insert into audit_events (actor_class, actor_id, actor_display, action, target_type, target_id, outcome, context, tenant_visible, row_hash, content_hash, content_salt) values ('human','u1','U','x.y','t','1','success','standard',true,'${hash64('a')}','${hash64('b')}','${hash64('c')}')`,
+    );
+    const seen = await t.runtime.database.transaction(async (tx) => {
+      // The same name, first on the path: an empty copy of the real table.
+      await tx.query('create temp table audit_events (like audit_events including defaults)');
+      const erased = await tx.query("select audit_erase_person('u1', 'Erased', null) as n");
+      const tail = await tx.query('select audit_chain_tail() as h');
+      return { erased: Number(erased[0]?.n), tail: tail[0]?.h };
+    });
+    expect(seen).toEqual({ erased: 1, tail: hash64('a') });
+    const [row] = await t.owner.database.query('select actor_display from audit_events');
+    expect(row).toMatchObject({ actor_display: 'Erased' });
+  });
 });

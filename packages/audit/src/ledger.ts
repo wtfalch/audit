@@ -471,7 +471,7 @@ export function createLedger(options: LedgerOptions): Ledger {
           row.erased_at instanceof Date ? row.erased_at : new Date(String(row.erased_at));
         const erasureHash = await computeErasureHash(row.row_hash, erasedAt);
         // Not handle.update(): the runtime role has no UPDATE on
-        // audit_events at all (0001's revoke); audit_seal_erasure (security
+        // audit_events at all (the host's `appendOnly`); audit_seal_erasure (security
         // definer, migrations/0004_chain.sql) is the door back in, the same
         // shape as audit_erase_person's.
         await handle.execute(sql`select audit_seal_erasure(${row.id}, ${erasureHash})`);
