@@ -150,7 +150,7 @@ function decodeCursor(cursor: string): { occurredAt: Date; id: number } | null {
  * `migrations/0006_force_rls.sql`) backs the tenant filter even if a future
  * change to this function's own `tenantId` condition slipped -- forced, so
  * this holds even for a connection that is the table's owner, not just
- * `<database>_rt`; only an actual Postgres superuser bypasses RLS, forced
+ * the runtime role; only an actual Postgres superuser bypasses RLS, forced
  * or not, and a host's runtime connection should never be one.
  *
  * Refusals: no credential or an unrecognised one is `unauthorized` (401); a

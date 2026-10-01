@@ -1,21 +1,21 @@
-import { PGlite } from '@electric-sql/pglite';
+import type { PGlite } from '@electric-sql/pglite';
 import { drizzle } from 'drizzle-orm/pglite';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { verifyChain } from './chain.js';
 import { type Handle, createLedger, scopeAuditTenant } from './ledger.js';
 import { type AuditEventRow, auditEvents, tables } from './tables.js';
 import { ALLOW_AUDIT_READ, auditResource } from './test/access.js';
-import { CORE, MIGRATION_SQL } from './test/db.js';
+import { CORE, grantsIn, migratedPglite } from './test/db.js';
 import { ledgerVocabularyFromCore } from './vocabulary.js';
 
 /**
  * Row-level security (migrations/0005_rls.sql), as the runtime role.
  *
  * PGlite runs as a superuser, and a superuser bypasses RLS, so every test
- * here `set role`s to `postgres_rt` -- the `<database>_rt` the migrations
- * grant to -- exactly the role a host's app connects as. The role exists
- * before the migrations run, so their grant blocks fire as they would on a
- * real estate database.
+ * here `set role`s to `postgres_rt`, standing in for the runtime role
+ * `ensureRuntimeRole` makes a host: insert and read on `audit_events`, and
+ * execute on the four functions. The real-Postgres tier (`privileges.test.ts`,
+ * `force-rls.test.ts`) uses the role `ensureRuntimeRole` really makes.
  */
 const TENANT_A = '11111111-1111-4111-8111-111111111111';
 const TENANT_B = '22222222-2222-4222-8222-222222222222';
@@ -52,10 +52,12 @@ async function visibleTargets(handle: Handle = db): Promise<string[]> {
 }
 
 beforeAll(async () => {
-  client = new PGlite();
+  client = await migratedPglite();
   await client.exec('create role postgres_rt');
-  await client.exec(MIGRATION_SQL);
   await client.exec('grant select, insert on audit_events to postgres_rt');
+  for (const signature of grantsIn('public')) {
+    await client.exec(`grant execute on function ${signature} to postgres_rt`);
+  }
   db = drizzle(client, { schema: tables }) as unknown as Handle;
 });
 

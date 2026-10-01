@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { type Ledger, createLedger } from './ledger.js';
 import type { Authorize } from './read.js';
 import { ledgerReadHandler } from './read.js';
@@ -17,6 +17,10 @@ beforeAll(async () => {
   t = await testDb();
   const vocabulary = ledgerVocabularyFromCore(CORE, {});
   ledger = createLedger({ vocabulary, checkRuntimeRole: false });
+});
+
+afterAll(async () => {
+  await t.close();
 });
 
 beforeEach(async () => {

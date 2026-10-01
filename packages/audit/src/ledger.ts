@@ -206,7 +206,7 @@ export interface LedgerOptions {
    * checked once for as long as that object lives, which can be the whole
    * process lifetime, not re-checked each call and not re-checked when the
    * role's grants change underneath it. A host that needs a role change
-   * (a revoked grant, a rotated `<database>_rt`) to take effect has to
+   * (a revoked grant, a rotated runtime role) to take effect has to
    * hand the ledger a handle it has not used before -- a fresh transaction
    * handle per request is the usual shape -- or restart the process so a
    * new handle is built.
@@ -218,7 +218,7 @@ export interface LedgerOptions {
    * the first call that hands one over, not construction; every later call
    * on the same handle reuses that first check rather than repeating it.
    * Set this to `false` for a connection that is deliberately broader than
-   * `<database>_rt` -- a test against a superuser fixture (PGlite's own
+   * the runtime role -- a test against a superuser fixture (PGlite's own
    * connection is one), or a host that already runs `assertRuntimeRole`
    * itself and does not want it run twice.
    */
@@ -261,8 +261,8 @@ const CHAIN_LOCK_NAME = 'wtfalch/audit chain';
  * call it inside a transaction; outside one it lasts a single statement.
  *
  * Holds for every role but the table's owner. Pair it with
- * `alter role <database>_rt set audit.require_tenant = 'on'` and a read that
- * forgot to scope sees nothing instead of everything.
+ * `settings: { 'audit.require_tenant': 'on' }` in the host's `ensureRuntimeRole`
+ * call and a read that forgot to scope sees nothing instead of everything.
  */
 export async function scopeAuditTenant(tx: Handle, tenantId: string): Promise<void> {
   if (tenantId === '') {
@@ -471,7 +471,7 @@ export function createLedger(options: LedgerOptions): Ledger {
           row.erased_at instanceof Date ? row.erased_at : new Date(String(row.erased_at));
         const erasureHash = await computeErasureHash(row.row_hash, erasedAt);
         // Not handle.update(): the runtime role has no UPDATE on
-        // audit_events at all (0001's revoke); audit_seal_erasure (security
+        // audit_events at all (the host's `appendOnly`); audit_seal_erasure (security
         // definer, migrations/0004_chain.sql) is the door back in, the same
         // shape as audit_erase_person's.
         await handle.execute(sql`select audit_seal_erasure(${row.id}, ${erasureHash})`);

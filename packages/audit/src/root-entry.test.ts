@@ -1,7 +1,8 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { MIGRATION_FILES } from './test/db.js';
 
 /**
  * `@wtfalch/contracts` is an optional peer (ADR 0001): a host that never
@@ -51,5 +52,20 @@ describe('the root entry point', () => {
     // A walk that silently visited nothing (a bad path, an empty file)
     // would pass the loop above having proved nothing.
     expect(visited.size).toBeGreaterThan(5);
+  });
+});
+
+describe('the migrations-dir subpath', () => {
+  const entry = join(distRoot, 'migrations-dir.js');
+
+  it('imports node:url only, and the root entry never exports it', async () => {
+    expect(importSpecifiersOf(entry)).toEqual(['node:url']);
+    const main = await import(join(distRoot, 'index.js'));
+    expect(main.migrationsDir).toBeUndefined();
+  });
+
+  it('points at a built directory holding every migration in src', async () => {
+    const { migrationsDir } = await import(entry);
+    expect(readdirSync(migrationsDir).sort()).toEqual(MIGRATION_FILES);
   });
 });
