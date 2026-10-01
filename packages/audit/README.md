@@ -282,11 +282,15 @@ an append-only log service. Keep every head, never overwrite one.
 set -eu
 OUT=$(DATABASE_URL="$ADMIN_DATABASE_URL" pnpm exec audit-verify-chain)
 echo "$OUT"
-echo "$OUT" | sed -n 's/.*head \([0-9a-f]\{64\}\)$/\1/p' >> "$ANCHOR"
+HEAD=$(echo "$OUT" | sed -n 's/.*head \([0-9a-f]\{64\}\)$/\1/p')
+test -n "$HEAD"
+echo "$HEAD" >> "$ANCHOR"
 ```
 
-`set -e` stops the script on a non-zero exit, so a broken chain is never
-anchored. Page on that failure.
+`set -e` stops the script on any non-zero exit, so a broken chain (exit 1) or
+an empty or hidden table (exit 3) is never anchored. `test -n` stops it when
+no head was printed. Page on any failure. On an object-lock bucket, write each
+head as its own object instead of appending to one file.
 
 To check against an anchor, pass it as `--head`. It must equal the newest
 row's `row_hash`, so use it when no row was written since the anchor was
