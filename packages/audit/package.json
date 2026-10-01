@@ -37,6 +37,9 @@
   "engines": {
     "node": ">=22.0.0"
   },
+  "dependencies": {
+    "@wtfalch/utils": "0.1.0"
+  },
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.build.json && mkdir -p dist/migrations && cp src/migrations/*.sql dist/migrations/",
     "prepack": "pnpm build",

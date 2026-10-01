@@ -1,3 +1,4 @@
+import { toHex } from '@wtfalch/utils/encoding';
 import type { AuditEventRow } from './tables.js';
 
 /**
@@ -82,12 +83,6 @@ async function sha256Hex(input: string): Promise<string> {
   const bytes = new TextEncoder().encode(input);
   const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes);
   return toHex(new Uint8Array(digest));
-}
-
-function toHex(bytes: Uint8Array): string {
-  return Array.from(bytes)
-    .map((byte) => byte.toString(16).padStart(2, '0'))
-    .join('');
 }
 
 function randomHex(byteLength: number): string {
