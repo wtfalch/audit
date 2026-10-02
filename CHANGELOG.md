@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.11.1
+
+- The peer `@wtfalch/authz` widens from `^0.16.0` to `>=0.16.0 <0.18.0`. A host
+  that installs this package with `@wtfalch/authz-store` 0.6.0 (peer
+  `@wtfalch/authz ^0.17.0`) could not satisfy both. This package imports only
+  authz's resource subset, which 0.17.0 did not move (authz STABILITY.md), so
+  no code changes. The dev dependency moves to `@wtfalch/authz` 0.17.0; the
+  suite also passes against 0.16.0.
+
 ## 0.11.0 — unreleased
 
 0.7.0 to 0.10.0 were never released: npm has 0.6.0, and a host moving from it
