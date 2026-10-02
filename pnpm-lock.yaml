@@ -27,8 +27,8 @@ importers:
         specifier: ^19
         version: 19.3.0(@types/react@19.3.0)
       '@wtfalch/authz':
-        specifier: 0.16.0
-        version: 0.16.0(zod@4.6.2)
+        specifier: 0.17.0
+        version: 0.17.0(zod@4.6.2)
       '@wtfalch/contracts':
         specifier: 0.2.0
         version: 0.2.0
@@ -364,8 +364,8 @@ packages:
   '@vitest/utils@4.1.11':
     resolution: {integrity: sha512-zTCVGpyFsGWBhllOyKlTw/vnr6D9qxsfSDyfbyZmTyjHw5N/VuvzHpHoQjm2ZJzn4RJgx5w4r7V0er69CmLgPQ==}
 
-  '@wtfalch/authz@0.16.0':
-    resolution: {integrity: sha512-bhVqm/uCe2WeFonc9cxgaL3H1DG+bn8wXZPttmXXVp3aD5Yf+jW3l00YiS4DFTgwPGbS2h0sChEecCY336+XRQ==}
+  '@wtfalch/authz@0.17.0':
+    resolution: {integrity: sha512-NjADFFH7zcM5eWmUTUsQp0rob+vHkBoz6dgtEFbyL6t6Xymf1izdg7zRrpNnvvCp82TgLifLVUQPsQSUsv2bTg==}
     engines: {node: '>=22.0.0'}
     peerDependencies:
       zod: ^4.1.13
@@ -1177,7 +1177,7 @@ snapshots:
       convert-source-map: 2.0.0
       tinyrainbow: 3.1.1
 
-  '@wtfalch/authz@0.16.0(zod@4.6.2)':
+  '@wtfalch/authz@0.17.0(zod@4.6.2)':
     dependencies:
       zod: 4.6.2
 
