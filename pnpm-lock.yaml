@@ -27,8 +27,8 @@ importers:
         specifier: ^19
         version: 19.3.0(@types/react@19.3.0)
       '@wtfalch/authz':
-        specifier: 0.17.0
-        version: 0.17.0(zod@4.6.2)
+        specifier: 0.18.0
+        version: 0.18.0(zod@4.6.2)
       '@wtfalch/contracts':
         specifier: 0.2.0
         version: 0.2.0
@@ -36,8 +36,8 @@ importers:
         specifier: 0.5.2
         version: 0.5.2(@electric-sql/pglite@0.5.8)(drizzle-orm@0.39.3(@electric-sql/pglite@0.5.8)(postgres@3.4.9))
       '@wtfalch/design':
-        specifier: 0.30.0
-        version: 0.30.0(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(zod@4.6.2)
+        specifier: 0.31.0
+        version: 0.31.0(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(zod@4.6.2)
       drizzle-orm:
         specifier: 0.39.3
         version: 0.39.3(@electric-sql/pglite@0.5.8)(postgres@3.4.9)
@@ -364,8 +364,8 @@ packages:
   '@vitest/utils@4.1.11':
     resolution: {integrity: sha512-zTCVGpyFsGWBhllOyKlTw/vnr6D9qxsfSDyfbyZmTyjHw5N/VuvzHpHoQjm2ZJzn4RJgx5w4r7V0er69CmLgPQ==}
 
-  '@wtfalch/authz@0.17.0':
-    resolution: {integrity: sha512-NjADFFH7zcM5eWmUTUsQp0rob+vHkBoz6dgtEFbyL6t6Xymf1izdg7zRrpNnvvCp82TgLifLVUQPsQSUsv2bTg==}
+  '@wtfalch/authz@0.18.0':
+    resolution: {integrity: sha512-y1fBqqeMzMeCntdzh6WXjZ8T/fid3/J3OpIT+VNyvM4Y5JhS05lUL9t+yiVFOwwpSQYtVgdVBcaPgCP+MV9Oew==}
     engines: {node: '>=22.0.0'}
     peerDependencies:
       zod: ^4.1.13
@@ -387,8 +387,8 @@ packages:
       drizzle-orm:
         optional: true
 
-  '@wtfalch/design@0.30.0':
-    resolution: {integrity: sha512-iiYiYPhM/aDBRV2jszXS1qsrKUeU1qzxy8slYbjCQM9hft7ZW+HzOQ0U2MHvSuE8i7G4VSZHz0PSC7AK0MSgww==}
+  '@wtfalch/design@0.31.0':
+    resolution: {integrity: sha512-tPi3chzfgK7TaOeKdFspbv+BCasyh7X8rH4+OeS3lcW/CYp4oaPtu6oaGcEU9aAaTA6XkFkGwk6Irtx3wGu7Ng==}
     engines: {node: '>=22.0.0'}
     peerDependencies:
       '@tiptap/extension-link': ^3.31.0
@@ -1177,7 +1177,7 @@ snapshots:
       convert-source-map: 2.0.0
       tinyrainbow: 3.1.1
 
-  '@wtfalch/authz@0.17.0(zod@4.6.2)':
+  '@wtfalch/authz@0.18.0(zod@4.6.2)':
     dependencies:
       zod: 4.6.2
 
@@ -1191,7 +1191,7 @@ snapshots:
       '@electric-sql/pglite': 0.5.8
       drizzle-orm: 0.39.3(@electric-sql/pglite@0.5.8)(postgres@3.4.9)
 
-  '@wtfalch/design@0.30.0(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(zod@4.6.2)':
+  '@wtfalch/design@0.31.0(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(zod@4.6.2)':
     dependencies:
       '@internationalized/date': 3.12.4
       '@radix-ui/react-slot': 1.3.3(@types/react@19.3.0)(react@19.3.0)
