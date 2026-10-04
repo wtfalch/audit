@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.12.0
+
+- The peer `@wtfalch/authz` widens from `>=0.16.0 <0.18.0` to `>=0.16.0
+  <0.19.0`: the canonical generation is now 0.18.0, and audit#43 found the
+  previous ceiling excluded it, so the estate could not form one supported
+  Auth/Authz/DB/Audit cohort by updating every consumer to current packages.
+  This package still imports only authz's resource subset
+  (`defineResourceCatalogue`, `resourceAccess`, `AccessResource`,
+  `ResourceAccess`, `ResourceGrant`, `ResourceModule`), and 0.18.0's own
+  CHANGELOG marks that subset unchanged, so no code changes. The dev
+  dependency moves to `@wtfalch/authz` 0.18.0; the full suite (including
+  `catalogue.test.ts`, `chain.test.ts` and, against a real Postgres,
+  `force-rls.test.ts`) also passes reinstalled against the 0.16.0 floor.
+- The peer `@wtfalch/design` widens from `^0.30.0` to `>=0.30.0 <0.32.0`, to
+  admit 0.31.0 (`Message`'s optional `authorCard`, additive per design's own
+  CHANGELOG). The dev dependency moves to `@wtfalch/design` 0.31.0; `pnpm
+  typecheck` also passes reinstalled against the 0.30.0 floor.
+- **New:** `scripts/check-authz-cohort.mjs`, run as the last step of `pnpm
+  check`. It packs the real tarball, installs it alongside
+  `@wtfalch/authz` 0.18.0, `@wtfalch/db` 0.5.2 and `@wtfalch/contracts`
+  0.2.0 as plain dependencies in a consumer outside this workspace (a real
+  peer conflict there is npm's `ERESOLVE`, not a warning), then recomposes
+  `auditPolicyModule`, `ResourceAccess`/`AccessResource` and
+  `@wtfalch/audit/read`'s `AuthorizedRead` against that cohort's real authz
+  and contracts types with no `as` cast, and confirms the packed migrations
+  are still shipped. Fails against this package's previous release, whose
+  peer excluded authz 0.18.0.
+
 ## 0.11.1
 
 - The peer `@wtfalch/authz` widens from `^0.16.0` to `>=0.16.0 <0.18.0`. A host
