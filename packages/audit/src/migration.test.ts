@@ -9,7 +9,11 @@ describe('the migrations', () => {
       const tables = await t.query(
         "select table_name from information_schema.tables where table_schema = current_schema() and table_name <> '_migrations_sources' order by 1",
       );
-      expect(tables.map((r) => r.table_name)).toEqual(['audit_events']);
+      expect(tables.map((r) => r.table_name)).toEqual([
+        'audit_checkpoints',
+        'audit_events',
+        'audit_signing_keys',
+      ]);
     } finally {
       await t.close();
     }
