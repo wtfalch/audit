@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { createHash, createPublicKey, verify as edVerify } from 'node:crypto';
+import { X509Certificate, createHash, createPublicKey, verify as cryptoVerify } from 'node:crypto';
 import { readFileSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -249,7 +249,7 @@ function ed25519Ok(publicKey: string, message: Buffer, signature: string): boole
       format: 'der',
       type: 'spki',
     });
-    return edVerify(null, message, key, Buffer.from(signature, 'hex'));
+    return cryptoVerify(null, message, key, Buffer.from(signature, 'hex'));
   } catch (_error) {
     return false;
   }
@@ -292,6 +292,264 @@ function readJson(path: string, name: string): unknown {
   } catch (error) {
     if (error instanceof BundleError) throw error;
     throw new BundleError(`${name} is not JSON`);
+  }
+}
+
+// RFC 3161 timestamp tokens: a CMS SignedData (RFC 5652) holding a TSTInfo.
+// The DER reader is this file's own: single-byte tags, definite lengths.
+class TokenError extends Error {}
+function refuse(reason: string): never {
+  throw new TokenError(reason);
+}
+
+interface Der {
+  tag: number;
+  raw: Buffer;
+  body: Buffer;
+}
+function readDer(bytes: Buffer, offset: number): Der {
+  const tag = bytes[offset];
+  const first = bytes[offset + 1];
+  if (tag === undefined || first === undefined || (tag & 0x1f) === 0x1f) {
+    return refuse('malformed DER');
+  }
+  let length = first;
+  let header = 2;
+  if (first >= 0x80) {
+    const count = first & 0x7f;
+    if (count === 0 || count > 4) return refuse('malformed DER');
+    length = 0;
+    for (let i = 0; i < count; i += 1) {
+      const byte = bytes[offset + 2 + i];
+      if (byte === undefined) return refuse('malformed DER');
+      length = length * 256 + byte;
+    }
+    header = 2 + count;
+  }
+  const end = offset + header + length;
+  if (end > bytes.length) return refuse('malformed DER');
+  return { tag, raw: bytes.subarray(offset, end), body: bytes.subarray(offset + header, end) };
+}
+function readExact(bytes: Buffer, tag: number): Der {
+  const der = readDer(bytes, 0);
+  if (der.raw.length !== bytes.length || der.tag !== tag) return refuse('malformed DER');
+  return der;
+}
+function kids(der: Der): Der[] {
+  const out: Der[] = [];
+  for (let offset = 0; offset < der.body.length; ) {
+    const child = readDer(der.body, offset);
+    out.push(child);
+    offset += child.raw.length;
+  }
+  return out;
+}
+function oidOf(der: Der | undefined): string {
+  if (der === undefined || der.tag !== 0x06 || der.body.length === 0)
+    return refuse('malformed DER');
+  const arcs: number[] = [];
+  let value = 0;
+  for (const byte of der.body) {
+    value = value * 128 + (byte & 0x7f);
+    if ((byte & 0x80) === 0) {
+      arcs.push(value);
+      value = 0;
+    }
+  }
+  const first = arcs.shift() ?? 0;
+  return [...(first < 80 ? [Math.floor(first / 40), first % 40] : [2, first - 80]), ...arcs].join(
+    '.',
+  );
+}
+function need(der: Der | undefined, tag: number): Der {
+  if (der === undefined || der.tag !== tag) return refuse('malformed token');
+  return der;
+}
+/** An INTEGER's value with leading zeros removed, as hex. */
+function intHex(der: Der | undefined): string {
+  return need(der, 0x02)
+    .body.toString('hex')
+    .replace(/^(00)+(?=.)/, '');
+}
+
+const OID_SIGNED_DATA = '1.2.840.113549.1.7.2';
+const OID_TSTINFO = '1.2.840.113549.1.9.16.1.4';
+const OID_CONTENT_TYPE = '1.2.840.113549.1.9.3';
+const OID_MESSAGE_DIGEST = '1.2.840.113549.1.9.4';
+const OID_TIMESTAMPING = '1.3.6.1.5.5.7.3.8';
+const OID_SHA256 = '2.16.840.1.101.3.4.2.1';
+const DIGESTS: Record<string, string> = {
+  [OID_SHA256]: 'sha256',
+  '2.16.840.1.101.3.4.2.2': 'sha384',
+  '2.16.840.1.101.3.4.2.3': 'sha512',
+};
+/** Signature algorithms we check: the hash they fix (or null: the digest algorithm's) and the key type. */
+const SIGNATURES: Record<string, { hash: string | null; key: 'rsa' | 'ec' }> = {
+  '1.2.840.113549.1.1.1': { hash: null, key: 'rsa' },
+  '1.2.840.113549.1.1.11': { hash: 'sha256', key: 'rsa' },
+  '1.2.840.113549.1.1.12': { hash: 'sha384', key: 'rsa' },
+  '1.2.840.113549.1.1.13': { hash: 'sha512', key: 'rsa' },
+  '1.2.840.10045.4.3.2': { hash: 'sha256', key: 'ec' },
+  '1.2.840.10045.4.3.3': { hash: 'sha384', key: 'ec' },
+  '1.2.840.10045.4.3.4': { hash: 'sha512', key: 'ec' },
+};
+
+function genTimeOf(der: Der): Date {
+  const match = /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})(?:\.(\d+))?Z$/.exec(
+    der.body.toString('latin1'),
+  );
+  if (der.tag !== 0x18 || !match) return refuse('genTime is malformed');
+  const [y, mo, d, h, mi, sec] = match.slice(1, 7).map(Number);
+  const ms = Number((match[7] ?? '').padEnd(3, '0').slice(0, 3));
+  return new Date(Date.UTC(y ?? 0, (mo ?? 1) - 1, d ?? 1, h ?? 0, mi ?? 0, sec ?? 0, ms));
+}
+
+const validAt = (cert: X509Certificate, at: Date): boolean =>
+  Date.parse(cert.validFrom) <= at.getTime() && at.getTime() <= Date.parse(cert.validTo);
+
+/** Whether `leaf` reaches a certificate in `roots`, through `pool`, with everyone valid at `at`. */
+function chainsTo(
+  leaf: X509Certificate,
+  pool: readonly X509Certificate[],
+  roots: readonly X509Certificate[],
+  at: Date,
+): boolean {
+  let current = leaf;
+  for (let depth = 0; depth < 6; depth += 1) {
+    const here = current;
+    if (roots.some((r) => r.fingerprint256 === here.fingerprint256 && validAt(r, at))) return true;
+    const issuedBy = (c: X509Certificate) =>
+      c.ca &&
+      c.fingerprint256 !== here.fingerprint256 &&
+      validAt(c, at) &&
+      here.checkIssued(c) &&
+      here.verify(c.publicKey);
+    if (roots.some(issuedBy)) return true;
+    const next = pool.find(issuedBy);
+    if (next === undefined) return false;
+    current = next;
+  }
+  return false;
+}
+
+/**
+ * Checks one token for `checkpointHash` and returns its `genTime`. Throws
+ * `TokenError` with fixed text. `roots` null checks everything but the chain.
+ */
+function verifyToken(
+  token: Buffer,
+  checkpointHash: string,
+  roots: readonly X509Certificate[] | null,
+): Date {
+  const [contentType, explicit] = kids(readExact(token, 0x30));
+  if (oidOf(contentType) !== OID_SIGNED_DATA) refuse('not CMS signed data');
+  const signedData = kids(need(explicit, 0xa0))[0];
+  const parts = kids(need(signedData, 0x30));
+  const encapsulated = kids(need(parts[2], 0x30));
+  const signerSet = need(parts[parts.length - 1], 0x31);
+  const certNodes = parts.find((part) => part.tag === 0xa0);
+  if (oidOf(encapsulated[0]) !== OID_TSTINFO) refuse('the content is not a TSTInfo');
+  const eContent = need(kids(need(encapsulated[1], 0xa0))[0], 0x04).body;
+
+  // TSTInfo: the imprint must be SHA-256 of the checkpoint hash's 32 raw bytes.
+  const tst = kids(readExact(eContent, 0x30));
+  const imprint = kids(need(tst[2], 0x30));
+  if (oidOf(kids(need(imprint[0], 0x30))[0]) !== OID_SHA256) refuse('the imprint is not SHA-256');
+  if (!need(imprint[1], 0x04).body.equals(sha256(Buffer.from(checkpointHash, 'hex')))) {
+    refuse('the token is for another hash');
+  }
+  const genTime = genTimeOf(need(tst[4], 0x18));
+
+  // SignerInfo: version, sid, digestAlgorithm, [0] signedAttrs, signatureAlgorithm, signature.
+  const signers = kids(signerSet);
+  if (signers.length !== 1) refuse('expected exactly one signer');
+  const info = kids(need(signers[0], 0x30));
+  const sid = kids(need(info[1], 0x30));
+  const digestName = DIGESTS[oidOf(kids(need(info[2], 0x30))[0])];
+  const attrs = need(info[3], 0xa0);
+  const sigAlg = SIGNATURES[oidOf(kids(need(info[4], 0x30))[0])];
+  const signature = need(info[5], 0x04).body;
+  if (digestName === undefined) refuse('unsupported digest algorithm');
+  if (sigAlg === undefined) refuse('unsupported signature algorithm');
+
+  let messageDigest: Buffer | null = null;
+  let attrContentType = '';
+  for (const attr of kids(attrs)) {
+    const [name, values] = kids(need(attr, 0x30));
+    const value = kids(need(values, 0x31))[0];
+    const id = oidOf(name);
+    if (id === OID_MESSAGE_DIGEST) {
+      if (messageDigest !== null) refuse('two message digests');
+      messageDigest = need(value, 0x04).body;
+    } else if (id === OID_CONTENT_TYPE) {
+      attrContentType = oidOf(value);
+    }
+  }
+  if (attrContentType !== OID_TSTINFO) refuse('the signed content type is not a TSTInfo');
+  if (
+    messageDigest === null ||
+    !createHash(digestName).update(eContent).digest().equals(messageDigest)
+  ) {
+    refuse('the signed digest does not match the content');
+  }
+
+  // The signer's certificate, found by issuer and serial among the embedded ones.
+  const certs: { cert: X509Certificate; issuer: Buffer; serial: string }[] = [];
+  for (const node of certNodes ? kids(certNodes) : []) {
+    try {
+      const tbs = kids(need(kids(node)[0], 0x30));
+      const at = tbs[0]?.tag === 0xa0 ? 1 : 0;
+      certs.push({
+        cert: new X509Certificate(node.raw),
+        issuer: need(tbs[at + 2], 0x30).raw,
+        serial: intHex(tbs[at]),
+      });
+    } catch (_error) {
+      refuse('a certificate in the token is unreadable');
+    }
+  }
+  const wantIssuer = need(sid[0], 0x30).raw;
+  const wantSerial = intHex(sid[1]);
+  const signer = certs.find((c) => c.issuer.equals(wantIssuer) && c.serial === wantSerial)?.cert;
+  if (signer === undefined) return refuse('the signer certificate is not in the token');
+  if (!signer.keyUsage.includes(OID_TIMESTAMPING)) refuse('the signer may not timestamp');
+  if (!validAt(signer, genTime)) refuse('genTime is outside the signer certificate validity');
+  if (signer.publicKey.asymmetricKeyType !== sigAlg.key)
+    refuse('the signature does not fit the key');
+
+  const signed = Buffer.from(attrs.raw);
+  signed[0] = 0x31;
+  let signatureOk = false;
+  try {
+    signatureOk = cryptoVerify(sigAlg.hash ?? digestName, signed, signer.publicKey, signature);
+  } catch (_error) {
+    signatureOk = false;
+  }
+  if (!signatureOk) refuse('the token signature does not verify');
+
+  if (
+    roots !== null &&
+    !chainsTo(
+      signer,
+      certs.map((c) => c.cert),
+      roots,
+      genTime,
+    )
+  ) {
+    refuse('the signer does not chain to the trusted roots');
+  }
+  return genTime;
+}
+
+function loadRoots(path: string): X509Certificate[] {
+  const blocks = readText(path, 'the TSA roots file').match(
+    /-----BEGIN CERTIFICATE-----[A-Za-z0-9+/=\s]+-----END CERTIFICATE-----/g,
+  );
+  if (blocks === null) throw new BundleError('the TSA roots file holds no certificate');
+  try {
+    return blocks.map((pem) => new X509Certificate(pem));
+  } catch (_error) {
+    throw new BundleError('the TSA roots file holds an unreadable certificate');
   }
 }
 
@@ -353,6 +611,7 @@ function inspect(
     ? readKeys(readJson(options.keys, 'the keys file'), 'the keys file')
     : readKeys(manifest.signing_keys, 'manifest signing_keys');
 
+  const tsaRoots = options.tsaRoots ? loadRoots(options.tsaRoots) : null;
   const eventsText = readText(join(dir, 'events.ndjson'), 'events.ndjson');
   const cpFile = readJson(join(dir, 'checkpoints.json'), 'checkpoints.json');
   const anchorFile = readJson(join(dir, 'anchors.json'), 'anchors.json');
@@ -599,6 +858,16 @@ function inspect(
         failures.push(`${at}: token is not base64`);
       } else if (sha256hex(der) !== anchor.token_hash) {
         failures.push(`${at}: token_hash does not match the token`);
+      }
+      try {
+        const genTime = verifyToken(der, anchor.checkpoint_hash, tsaRoots);
+        if (Date.parse(anchor.anchored_at) !== genTime.getTime()) {
+          failures.push(`${at}: anchored_at is not the token's genTime`);
+        }
+      } catch (error) {
+        failures.push(
+          `${at}: token: ${error instanceof TokenError ? error.message : 'could not be read'}`,
+        );
       }
     }
   });
