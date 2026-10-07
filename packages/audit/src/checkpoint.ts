@@ -1,8 +1,21 @@
-import { asc, desc, eq, sql } from 'drizzle-orm';
+import { asc, desc, eq, gte, sql } from 'drizzle-orm';
 import { auditCheckpoints, auditSigningKeys } from './checkpoint-tables.js';
 import type { AuditCheckpointRow } from './checkpoint-tables.js';
 import type { Handle } from './ledger.js';
-import { appendLeaf, foldFrontier, fromHex, isHash, leafHash, sha256, toHex } from './merkle.js';
+import {
+  appendLeaf,
+  consistencyNodes,
+  foldFrontier,
+  fromHex,
+  inclusionPath,
+  isHash,
+  leafHash,
+  merkleRoot,
+  sha256,
+  toHex,
+  verifyConsistencyNodes,
+  verifyInclusionPath,
+} from './merkle.js';
 import { resultRows } from './sql-result.js';
 
 /**
@@ -111,7 +124,7 @@ async function ed25519Verify(
 }
 
 /** One page of leaves after `afterSeq`, through `audit_chain_leaves` (security definer: sees every tenant's rows). */
-export async function readLeaves(
+async function readLeaves(
   handle: Handle,
   afterSeq: number,
   maxRows = LEAF_PAGE,
@@ -262,4 +275,104 @@ export async function verifyCheckpoint(
 export async function listCheckpoints(handle: Handle): Promise<Checkpoint[]> {
   const rows = await handle.select().from(auditCheckpoints).orderBy(asc(auditCheckpoints.treeSize));
   return rows.map(toCheckpoint);
+}
+
+export interface InclusionProof {
+  seq: number;
+  /** `seq - 1`. */
+  leaf_index: number;
+  /** The tree size of `checkpoint`. */
+  tree_size: number;
+  row_hash: string;
+  /** Sibling hashes from the leaf up to the root, hex. */
+  audit_path: string[];
+  checkpoint: Checkpoint;
+}
+
+export interface ConsistencyProof {
+  from_size: number;
+  to_size: number;
+  nodes: string[];
+}
+
+/** The leaf hashes of rows `1..upTo`, read again from the database: no tree nodes are stored. */
+async function readLeafHashes(handle: Handle, upTo: number): Promise<string[]> {
+  const hashes: string[] = [];
+  while (hashes.length < upTo) {
+    const page = await readLeaves(handle, hashes.length, Math.min(LEAF_PAGE, upTo - hashes.length));
+    if (page.length === 0) throw new Error('the chain has fewer rows than the proof needs');
+    for (const leaf of page) {
+      if (leaf.seq !== hashes.length + 1) throw new Error('the chain has a gap in seq');
+      hashes.push(await leafHash(leaf.row_hash));
+    }
+  }
+  return hashes;
+}
+
+/**
+ * The path from row `seq` to the root of the first checkpoint that covers it.
+ * Throws when no checkpoint does yet, or when the rows no longer hash to that
+ * checkpoint's root. Reads every leaf up to the checkpoint's size.
+ */
+export async function proveInclusion(handle: Handle, seq: number): Promise<InclusionProof> {
+  if (!Number.isSafeInteger(seq) || seq < 1) throw new Error('seq must be a positive integer');
+  const [row] = await handle
+    .select()
+    .from(auditCheckpoints)
+    .where(gte(auditCheckpoints.treeSize, seq))
+    .orderBy(asc(auditCheckpoints.treeSize))
+    .limit(1);
+  if (!row) throw new Error(`row ${seq} is not sealed in a checkpoint yet`);
+  const leaves = await readLeafHashes(handle, row.treeSize);
+  if ((await merkleRoot(leaves)) !== row.root)
+    throw new Error('the rows do not hash to the checkpoint root');
+  const rows = await readLeaves(handle, seq - 1, 1);
+  return {
+    seq,
+    leaf_index: seq - 1,
+    tree_size: row.treeSize,
+    row_hash: (rows[0] as { row_hash: string }).row_hash,
+    audit_path: await inclusionPath(leaves, seq - 1),
+    checkpoint: toCheckpoint(row),
+  };
+}
+
+/** Does the path take the row's hash to `checkpoint.root`? Checks the path only; `verifyCheckpoint` checks the checkpoint. */
+export async function verifyInclusion(proof: InclusionProof): Promise<boolean> {
+  const { seq, leaf_index, tree_size, row_hash, audit_path, checkpoint } = proof;
+  if (!isHash(row_hash) || !Number.isSafeInteger(seq) || leaf_index !== seq - 1) return false;
+  if (checkpoint.tree_size !== tree_size) return false;
+  return verifyInclusionPath(
+    await leafHash(row_hash),
+    leaf_index,
+    tree_size,
+    audit_path,
+    checkpoint.root,
+  );
+}
+
+/** The nodes that prove the tree of the first `fromSize` rows is a prefix of the tree of the first `toSize`. Reads every leaf up to `toSize`. */
+export async function proveConsistency(
+  handle: Handle,
+  fromSize: number,
+  toSize: number,
+): Promise<ConsistencyProof> {
+  if (
+    !Number.isSafeInteger(fromSize) ||
+    !Number.isSafeInteger(toSize) ||
+    fromSize < 1 ||
+    fromSize > toSize
+  )
+    throw new Error('sizes must be integers with 1 <= fromSize <= toSize');
+  const leaves = await readLeafHashes(handle, toSize);
+  return { from_size: fromSize, to_size: toSize, nodes: await consistencyNodes(leaves, fromSize) };
+}
+
+/** Does the proof show the tree with `fromRoot` is a prefix of the tree with `toRoot`? */
+export function verifyConsistency(
+  proof: ConsistencyProof,
+  fromRoot: string,
+  toRoot: string,
+): Promise<boolean> {
+  return verifyConsistencyNodes(proof.from_size, proof.to_size, proof.nodes, fromRoot, toRoot);
 }

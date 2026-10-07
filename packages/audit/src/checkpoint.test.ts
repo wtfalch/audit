@@ -8,9 +8,13 @@ import {
   type Checkpoint,
   type CheckpointSigner,
   type SigningKey,
+  proveConsistency,
+  proveInclusion,
   retireSigningKey,
   sealCheckpoint,
   verifyCheckpoint,
+  verifyConsistency,
+  verifyInclusion,
 } from './checkpoint.js';
 import { foldFrontier } from './merkle.js';
 import { tables } from './tables.js';
@@ -233,6 +237,97 @@ describe('verifyCheckpoint', () => {
       created_at: new Date(Date.parse(keys[0]?.retired_at as string) + 1).toISOString(),
     };
     expect(await verifyCheckpoint(late, keys)).toBe(false);
+  });
+});
+
+describe('proofs', () => {
+  async function twoCheckpoints() {
+    const signer = newSigner();
+    await insertLeaves(t.exec, 1, 3);
+    const first = (await sealCheckpoint(t.db, { ledger: 'app', signer })) as Checkpoint;
+    await insertLeaves(t.exec, 4, 7);
+    const second = (await sealCheckpoint(t.db, { ledger: 'app', signer })) as Checkpoint;
+    return { first, second };
+  }
+
+  it('proves each row into the first checkpoint that covers it', async () => {
+    const { first, second } = await twoCheckpoints();
+    for (let seq = 1; seq <= 7; seq++) {
+      const proof = await proveInclusion(t.db, seq);
+      const covering = seq <= 3 ? first : second;
+      expect(proof).toMatchObject({
+        seq,
+        leaf_index: seq - 1,
+        tree_size: covering.tree_size,
+        row_hash: rowHashOf(seq - 1),
+        checkpoint: covering,
+      });
+      expect(await verifyInclusion(proof)).toBe(true);
+    }
+  });
+
+  it('refuses a row that is not sealed yet, and a seq that is not a positive integer', async () => {
+    await twoCheckpoints();
+    await insertLeaves(t.exec, 8, 8);
+    await expect(proveInclusion(t.db, 8)).rejects.toThrow('row 8 is not sealed');
+    await expect(proveInclusion(t.db, 0)).rejects.toThrow('positive integer');
+    await expect(proveInclusion(t.db, 1.5)).rejects.toThrow('positive integer');
+  });
+
+  it('refuses to prove against rows that no longer hash to the checkpoint root', async () => {
+    await twoCheckpoints();
+    await t.exec('alter table audit_events disable trigger all');
+    await t.exec(`update audit_events set row_hash = '${'ab'.repeat(32)}' where seq = 2`);
+    await t.exec('alter table audit_events enable trigger all');
+    await expect(proveInclusion(t.db, 1)).rejects.toThrow('do not hash to the checkpoint root');
+  });
+
+  it('fails an inclusion proof whose row, path, index, size or root was changed', async () => {
+    await twoCheckpoints();
+    const proof = await proveInclusion(t.db, 5);
+    const flip = (h: string) => (h[0] === '0' ? '1' : '0') + h.slice(1);
+    expect(await verifyInclusion({ ...proof, row_hash: flip(proof.row_hash) })).toBe(false);
+    expect(await verifyInclusion({ ...proof, leaf_index: 4 + 1, seq: 5 })).toBe(false);
+    expect(await verifyInclusion({ ...proof, seq: 6 })).toBe(false);
+    expect(await verifyInclusion({ ...proof, tree_size: 8 })).toBe(false);
+    expect(await verifyInclusion({ ...proof, audit_path: proof.audit_path.slice(1) })).toBe(false);
+    expect(
+      await verifyInclusion({
+        ...proof,
+        audit_path: proof.audit_path.map((x, i) => (i === 0 ? flip(x) : x)),
+      }),
+    ).toBe(false);
+    expect(
+      await verifyInclusion({
+        ...proof,
+        checkpoint: { ...proof.checkpoint, root: flip(proof.checkpoint.root) },
+      }),
+    ).toBe(false);
+  });
+
+  it('proves the first checkpoint is a prefix of the second', async () => {
+    const { first, second } = await twoCheckpoints();
+    const proof = await proveConsistency(t.db, first.tree_size, second.tree_size);
+    expect(proof.from_size).toBe(3);
+    expect(proof.to_size).toBe(7);
+    expect(await verifyConsistency(proof, first.root, second.root)).toBe(true);
+    expect(await verifyConsistency(proof, second.root, first.root)).toBe(false);
+    expect(await verifyConsistency({ ...proof, from_size: 2 }, first.root, second.root)).toBe(
+      false,
+    );
+    expect(await verifyConsistency({ ...proof, to_size: 3 }, first.root, second.root)).toBe(false);
+    expect(
+      await verifyConsistency({ ...proof, nodes: proof.nodes.slice(1) }, first.root, second.root),
+    ).toBe(false);
+    expect(await proveConsistency(t.db, 7, 7)).toEqual({ from_size: 7, to_size: 7, nodes: [] });
+  });
+
+  it('refuses sizes that are not 1 <= from <= to, and a size beyond the chain', async () => {
+    await twoCheckpoints();
+    await expect(proveConsistency(t.db, 0, 3)).rejects.toThrow('1 <= fromSize <= toSize');
+    await expect(proveConsistency(t.db, 4, 3)).rejects.toThrow('1 <= fromSize <= toSize');
+    await expect(proveConsistency(t.db, 1, 2.5)).rejects.toThrow('1 <= fromSize <= toSize');
+    await expect(proveConsistency(t.db, 1, 8)).rejects.toThrow('fewer rows');
   });
 });
 

@@ -103,7 +103,138 @@ export async function merkleRoot(leaves: readonly string[]): Promise<string> {
   return subtreeRoot(leaves, 0, leaves.length);
 }
 
+/** RFC 6962 2.1.1: the audit path of leaf `index` in the tree over `leaves`, deepest sibling first. */
+export async function inclusionPath(leaves: readonly string[], index: number): Promise<string[]> {
+  if (!Number.isSafeInteger(index) || index < 0 || index >= leaves.length)
+    throw new Error('leaf index is outside the tree');
+  const path: string[] = [];
+  const walk = async (m: number, start: number, end: number): Promise<void> => {
+    if (end - start === 1) return;
+    const k = split(end - start);
+    if (m < k) {
+      await walk(m, start, start + k);
+      path.push(await subtreeRoot(leaves, start + k, end));
+    } else {
+      await walk(m - k, start + k, end);
+      path.push(await subtreeRoot(leaves, start, start + k));
+    }
+  };
+  await walk(index, 0, leaves.length);
+  return path;
+}
+
+/** RFC 6962 2.1.2: the nodes that prove the tree of the first `from` leaves is a prefix of the tree over `leaves`. */
+export async function consistencyNodes(leaves: readonly string[], from: number): Promise<string[]> {
+  if (!Number.isSafeInteger(from) || from < 1 || from > leaves.length)
+    throw new Error('from size is outside the tree');
+  const nodes: string[] = [];
+  const walk = async (m: number, start: number, end: number, whole: boolean): Promise<void> => {
+    const n = end - start;
+    if (m === n) {
+      if (!whole) nodes.push(await subtreeRoot(leaves, start, end));
+      return;
+    }
+    const k = split(n);
+    if (m <= k) {
+      await walk(m, start, start + k, whole);
+      nodes.push(await subtreeRoot(leaves, start + k, end));
+    } else {
+      await walk(m - k, start + k, end, false);
+      nodes.push(await subtreeRoot(leaves, start, start + k));
+    }
+  };
+  await walk(from, 0, leaves.length, true);
+  return nodes;
+}
+
+const isOdd = (n: number) => n % 2 === 1;
+const half = (n: number) => Math.floor(n / 2);
+
+function isSize(n: number): boolean {
+  return Number.isSafeInteger(n) && n >= 1;
+}
+
+function isPowerOfTwo(n: number): boolean {
+  let p = 1;
+  while (p < n) p *= 2;
+  return p === n;
+}
+
 /** Is this 64 lower-case hex characters? */
 export function isHash(value: unknown): value is string {
   return typeof value === 'string' && HEX_32.test(value);
+}
+
+/** RFC 9162 2.1.3.2: does `path` take the leaf hash at `index` up to `root` in a tree of `size` leaves? */
+export async function verifyInclusionPath(
+  leaf: string,
+  index: number,
+  size: number,
+  path: readonly string[],
+  root: string,
+): Promise<boolean> {
+  if (!isSize(size) || !Number.isSafeInteger(index) || index < 0 || index >= size) return false;
+  if (![leaf, root, ...path].every(isHash)) return false;
+  let fn = index;
+  let sn = size - 1;
+  let r = leaf;
+  for (const p of path) {
+    if (sn === 0) return false;
+    if (isOdd(fn) || fn === sn) {
+      r = await nodeHash(p, r);
+      if (!isOdd(fn)) {
+        while (!isOdd(fn) && fn !== 0) {
+          fn = half(fn);
+          sn = half(sn);
+        }
+      }
+    } else {
+      r = await nodeHash(r, p);
+    }
+    fn = half(fn);
+    sn = half(sn);
+  }
+  return sn === 0 && r === root;
+}
+
+/** RFC 9162 2.1.4.2: does `nodes` prove the tree with `fromRoot` over `from` leaves is a prefix of the tree with `toRoot` over `to` leaves? */
+export async function verifyConsistencyNodes(
+  from: number,
+  to: number,
+  nodes: readonly string[],
+  fromRoot: string,
+  toRoot: string,
+): Promise<boolean> {
+  if (!isSize(from) || !isSize(to) || from > to) return false;
+  if (![fromRoot, toRoot, ...nodes].every(isHash)) return false;
+  if (from === to) return nodes.length === 0 && fromRoot === toRoot;
+  const path = isPowerOfTwo(from) ? [fromRoot, ...nodes] : [...nodes];
+  const first = path[0];
+  if (first === undefined) return false;
+  let fn = from - 1;
+  let sn = to - 1;
+  while (isOdd(fn)) {
+    fn = half(fn);
+    sn = half(sn);
+  }
+  let fr = first;
+  let sr = first;
+  for (const c of path.slice(1)) {
+    if (sn === 0) return false;
+    if (isOdd(fn) || fn === sn) {
+      fr = await nodeHash(c, fr);
+      sr = await nodeHash(c, sr);
+      if (!isOdd(fn)) {
+        while (!isOdd(fn) && fn !== 0) {
+          fn = half(fn);
+          sn = half(sn);
+        }
+      }
+    } else {
+      sr = await nodeHash(sr, c);
+    }
+    fn = half(fn);
+    sn = half(sn);
+  }
+  return sn === 0 && fr === fromRoot && sr === toRoot;
 }
