@@ -29,6 +29,8 @@ export const grantsIn = (schema: string) => [
   `${schema}.audit_erase_person(text, text, text)`,
   `${schema}.audit_seal_erasure(bigint, text)`,
   `${schema}.audit_chain_tail()`,
+  `${schema}.audit_chain_tail_v2()`,
+  `${schema}.audit_chain_leaves(bigint, integer)`,
   `${schema}.audit_pending_erasures()`,
 ];
 

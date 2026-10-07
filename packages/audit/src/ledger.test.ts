@@ -5,6 +5,7 @@ import { type Ledger, type PageOptions, createLedger } from './ledger.js';
 import { AUDIT_COLUMNS, auditIndexes } from './tables.js';
 import { ALLOW_AUDIT_READ, auditResource } from './test/access.js';
 import { CORE, type TestDb, testDb } from './test/db.js';
+import { verifyTable } from './verify-table.js';
 import { ledgerVocabularyFromCore } from './vocabulary.js';
 
 const TENANT_A = '11111111-1111-4111-8111-111111111111';
@@ -810,5 +811,141 @@ describe('hash chain (createLedger({ hashChain: true }))', () => {
     expect(unrelated?.erasedAt).toBeNull();
     expect(unrelated?.contentSalt).toMatch(/^[0-9a-f]{32}$/);
     expect(await verifyChain(rows)).toEqual({ ok: true });
+  });
+
+  it('writes format 2: chain_version, a dense seq from 1 and the database clock, with the tail linking by hash', async () => {
+    for (let i = 0; i < 3; i++) {
+      await chainedLedger.sign(t.db, {
+        action: 'invoice.paid',
+        tenantId: i === 1 ? TENANT_B : TENANT_A,
+        actor: ada,
+        context: 'standard',
+        target: { type: 'invoice', id: `i_${i}` },
+        after: { amount: 100 + i },
+      });
+    }
+    const rows = await t.query(
+      'select chain_version, seq, received_at, prev_hash, row_hash from audit_events order by id',
+    );
+    expect(rows.map((r) => [r.chain_version, Number(r.seq)])).toEqual([
+      [2, 1],
+      [2, 2],
+      [2, 3],
+    ]);
+    for (const r of rows) expect(r.received_at).toBeTruthy();
+    expect(rows[1]?.prev_hash).toBe(rows[0]?.row_hash);
+    expect(rows[2]?.prev_hash).toBe(rows[1]?.row_hash);
+    const [tail] = await t.query('select seq, row_hash from audit_chain_tail_v2()');
+    expect(Number(tail?.seq)).toBe(3);
+    expect(tail?.row_hash).toBe(rows[2]?.row_hash);
+    const leaves = await t.query('select seq, row_hash from audit_chain_leaves(1, 5)');
+    expect(leaves.map((l) => [Number(l.seq), l.row_hash])).toEqual([
+      [2, rows[1]?.row_hash],
+      [3, rows[2]?.row_hash],
+    ]);
+    expect(await t.query('select seq from audit_chain_leaves(0, 1)')).toHaveLength(1);
+  });
+
+  it('keeps seq dense and the chain linked under two concurrent sign() calls', async () => {
+    await Promise.all(
+      [0, 1].map((i) =>
+        chainedLedger.sign(t.db, {
+          action: 'invoice.paid',
+          tenantId: TENANT_A,
+          actor: ada,
+          context: 'standard',
+          target: { type: 'invoice', id: `c_${i}` },
+        }),
+      ),
+    );
+    const rows = await t.query('select seq, prev_hash, row_hash from audit_events order by id');
+    expect(rows.map((r) => Number(r.seq))).toEqual([1, 2]);
+    expect(rows[1]?.prev_hash).toBe(rows[0]?.row_hash);
+    expect(await verifyTable(t.db)).toMatchObject({ ok: true, rows: 2 });
+  });
+
+  it('refuses a float in before or after, naming the field, and inserts nothing', async () => {
+    const sign = (extra: { before?: unknown; after?: unknown }) =>
+      chainedLedger.sign(t.db, {
+        action: 'invoice.paid',
+        tenantId: TENANT_A,
+        actor: ada,
+        context: 'standard',
+        target: { type: 'invoice', id: 'f' },
+        ...extra,
+      });
+    await expect(sign({ after: { lines: [{ amount: 1.5 }] } })).rejects.toThrow(
+      /"after\.lines\[0\]\.amount" holds 1\.5/,
+    );
+    await expect(sign({ before: { amount: 0.1 } })).rejects.toThrow(/"before\.amount" holds 0\.1/);
+    await expect(sign({ after: 2 ** 60 })).rejects.toThrow(/"after" holds/);
+    expect(await t.query('select id from audit_events')).toEqual([]);
+    await sign({ after: { n: -0, big: Number.MAX_SAFE_INTEGER } });
+    expect(await t.query('select id from audit_events')).toHaveLength(1);
+  });
+
+  it('erases a format 2 row and the run still verifies, with the content gone', async () => {
+    await chainedLedger.sign(t.db, {
+      action: 'invoice.paid',
+      tenantId: TENANT_A,
+      actor: ada,
+      context: 'standard',
+      target: { type: 'invoice', id: 'own' },
+      after: { by: 'ada' },
+    });
+    await chainedLedger.sign(t.db, {
+      action: 'invoice.paid',
+      tenantId: TENANT_A,
+      actor: ops,
+      context: 'standard',
+      target: { type: 'invoice', id: 'other' },
+    });
+    expect(await chainedLedger.erase(t.db, { subject: 'user_ada', pseudonym: 'Erased' })).toBe(1);
+    const [own] = await t.query(
+      'select chain_version, seq, content_salt, erasure_hash from audit_events order by id limit 1',
+    );
+    expect(own?.chain_version).toBe(2);
+    expect(Number(own?.seq)).toBe(1);
+    expect(own?.content_salt).toBeNull();
+    expect(own?.erasure_hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(await verifyTable(t.db)).toMatchObject({ ok: true, rows: 2 });
+  });
+
+  it('freezes chain_version, seq and received_at against update', async () => {
+    await chainedLedger.sign(t.db, {
+      action: 'invoice.paid',
+      tenantId: TENANT_A,
+      actor: ada,
+      context: 'standard',
+      target: { type: 'invoice', id: 'g' },
+    });
+    for (const set of [
+      'seq = 9',
+      "received_at = received_at + interval '1 second'",
+      'chain_version = null',
+    ]) {
+      await expect(t.exec(`update audit_events set ${set}`)).rejects.toThrow();
+    }
+    const [row] = await t.query('select chain_version, seq from audit_events');
+    expect(row?.chain_version).toBe(2);
+    expect(Number(row?.seq)).toBe(1);
+  });
+
+  it('refuses a half-set format 2 row and a repeated seq', async () => {
+    await chainedLedger.sign(t.db, {
+      action: 'invoice.paid',
+      tenantId: TENANT_A,
+      actor: ada,
+      context: 'standard',
+      target: { type: 'invoice', id: 'h' },
+    });
+    const insert = (cols: string) =>
+      t.exec(
+        `insert into audit_events (actor_class, actor_id, actor_display, action, target_type, target_id, outcome, context, tenant_visible, ${cols.split('|')[0]}) values ('human','a','A','invoice.paid','invoice','x','success','standard',true, ${cols.split('|')[1]})`,
+      );
+    await expect(insert('seq|7')).rejects.toThrow(/audit_events_chain_v2_check/);
+    await expect(insert('chain_version, seq, received_at|2, 1, now()')).rejects.toThrow(
+      /audit_events_seq_idx/,
+    );
   });
 });

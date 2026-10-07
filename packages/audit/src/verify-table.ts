@@ -37,6 +37,7 @@ export async function verifyTable(
   const pageSize = Math.max(1, options.pageSize ?? 5000);
   let lastId = options.afterId ?? 0;
   let previous: string | undefined;
+  let previousSeq: number | undefined = options.afterId === undefined ? 0 : undefined;
   let count = 0;
   for (;;) {
     const page = await handle
@@ -49,13 +50,17 @@ export async function verifyTable(
     // A whole-table run anchors the front with origin null, so deleting the earliest rows breaks the link. With afterId the start is a window, so the first row is not linked back.
     const origin =
       previous !== undefined ? previous : options.afterId === undefined ? null : undefined;
-    const result = await verifyChain(page, origin === undefined ? {} : { origin });
+    const result = await verifyChain(page, {
+      ...(origin === undefined ? {} : { origin }),
+      ...(previousSeq === undefined ? {} : { seqOrigin: previousSeq }),
+    });
     if (!result.ok)
       return { ok: false, id: page[result.index]?.id ?? lastId, reason: result.reason };
     const last = page[page.length - 1];
     if (!last) break;
     lastId = last.id;
     previous = last.rowHash ?? undefined;
+    for (const row of page) if (row.seq !== null) previousSeq = row.seq;
     count += page.length;
     if (page.length < pageSize) break;
   }

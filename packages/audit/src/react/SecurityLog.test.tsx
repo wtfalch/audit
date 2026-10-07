@@ -41,6 +41,9 @@ function row(over: Partial<AuditEventRow> = {}): AuditEventRow {
     contentHash: null,
     contentSalt: null,
     erasureHash: null,
+    chainVersion: null,
+    seq: null,
+    receivedAt: null,
     ...over,
   };
 }
