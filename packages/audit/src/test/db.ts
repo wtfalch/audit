@@ -12,6 +12,7 @@ import { drizzle } from 'drizzle-orm/pglite';
 import type { Handle } from '../ledger.js';
 import { migrationsDir } from '../migrations-dir.js';
 import { tables } from '../tables.js';
+import { rowHashOf } from './rfc6962.js';
 
 /** Every migration this package ships, in file order — what a host that copied them all has. */
 export const MIGRATION_FILES = readdirSync(migrationsDir)
@@ -24,13 +25,19 @@ export const MIGRATION_SQL = MIGRATION_FILES.map((name) =>
 export const sources = [{ name: 'audit', dir: migrationsDir }];
 
 /** What a host passes to `ensureRuntimeRole`, as the README documents it. */
-export const APPEND_ONLY = ['audit_events'];
+export const APPEND_ONLY = [
+  'audit_events',
+  'audit_checkpoints',
+  'audit_signing_keys',
+  'audit_anchors',
+];
 export const grantsIn = (schema: string) => [
   `${schema}.audit_erase_person(text, text, text)`,
   `${schema}.audit_seal_erasure(bigint, text)`,
   `${schema}.audit_chain_tail()`,
   `${schema}.audit_chain_tail_v2()`,
   `${schema}.audit_chain_leaves(bigint, integer)`,
+  `${schema}.audit_retire_signing_key(text)`,
   `${schema}.audit_pending_erasures()`,
 ];
 
@@ -250,3 +257,23 @@ export const CORE = {
   outcomes: ['success', 'denied', 'error'],
   breakGlass: { reasonCodes: ['customer_support', 'incident', 'review', 'migration', 'other'] },
 } as const;
+
+/**
+ * Inserts one format 2 event per `seq` in `from..to` with a deterministic
+ * 64-hex `row_hash` (`rowHashOf(seq - 1)`), straight into the table: leaves
+ * for the checkpoint tests, whose hashes the test knows without recomputing.
+ */
+export async function insertLeaves(
+  exec: (text: string) => Promise<void>,
+  from: number,
+  to: number,
+) {
+  for (let seq = from; seq <= to; seq++) {
+    await exec(`
+      insert into audit_events
+        (actor_class, actor_id, actor_display, action, target_type, target_id, outcome, context,
+         tenant_visible, chain_version, seq, received_at, row_hash)
+      values ('human', 'u', 'U', 'a.b', 't', 'x', 'success', 'standard', false, 2, ${seq}, now(), '${rowHashOf(seq - 1)}')
+    `);
+  }
+}

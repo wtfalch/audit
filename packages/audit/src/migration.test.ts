@@ -10,6 +10,7 @@ describe('the migrations', () => {
         "select table_name from information_schema.tables where table_schema = current_schema() and table_name <> '_migrations_sources' order by 1",
       );
       expect(tables.map((r) => r.table_name)).toEqual([
+        'audit_anchors',
         'audit_checkpoints',
         'audit_events',
         'audit_signing_keys',

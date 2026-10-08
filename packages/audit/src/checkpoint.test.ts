@@ -18,15 +18,13 @@ import {
 } from './checkpoint.js';
 import { foldFrontier } from './merkle.js';
 import { tables } from './tables.js';
-import { insertLeaves, installChainV2Standin } from './test/chain-v2-standin.js';
-import { type TestDb, sources, testDb } from './test/db.js';
+import { type TestDb, insertLeaves, sources, testDb } from './test/db.js';
 import { mth, rowHashOf } from './test/rfc6962.js';
 
 let t: TestDb;
 
 beforeAll(async () => {
   t = await testDb();
-  await installChainV2Standin(t.exec);
 });
 afterAll(async () => {
   await t.close();
@@ -398,7 +396,6 @@ describe('migration 0008 in a named schema', () => {
 
     await pglite.exec('set search_path to svc');
     const exec = (text: string) => pglite.exec(text).then(() => undefined);
-    await installChainV2Standin(exec);
     await insertLeaves(exec, 1, 3);
     const signer = newSigner();
     const db = drizzle(pglite, { schema: tables });

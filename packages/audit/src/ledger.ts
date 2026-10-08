@@ -393,12 +393,12 @@ export function createLedger(options: LedgerOptions): Ledger {
     // exactly this row's seal-and-insert and released at commit.
     await handle.transaction(async (tx) => {
       await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${CHAIN_LOCK_NAME}, 0))`);
-      // Through audit_chain_tail() (security definer, 0005_rls.sql), not a
-      // select on the table: under a tenant scope RLS hides every other
-      // tenant's rows, and the chain is one chain across all of them.
-      // audit_chain_tail_v2() answers seq, the newest row's hash and the
-      // database clock in one read; bigint comes back as a string or a number
-      // depending on the driver.
+      // Through audit_chain_tail_v2() (security definer, 0007_chain_v2.sql),
+      // not a select on the table: under a tenant scope RLS hides every other
+      // tenant's rows, and the chain is one chain across all of them. It
+      // answers seq, the newest row's hash and the database clock in one
+      // read; bigint comes back as a string or a number depending on the
+      // driver.
       const [tail] = resultRows<{
         seq: number | string | null;
         row_hash: string | null;

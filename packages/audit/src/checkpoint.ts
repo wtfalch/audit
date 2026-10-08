@@ -1,7 +1,8 @@
 import { asc, desc, eq, gte, sql } from 'drizzle-orm';
+import { canonicalJsonV2 } from './canonical.js';
 import { auditCheckpoints, auditSigningKeys } from './checkpoint-tables.js';
 import type { AuditCheckpointRow } from './checkpoint-tables.js';
-import type { Handle } from './ledger.js';
+import { CHAIN_LOCK_NAME, type Handle } from './ledger.js';
 import {
   appendLeaf,
   consistencyNodes,
@@ -27,34 +28,6 @@ import { resultRows } from './sql-result.js';
  * (migrations/0008_checkpoints.sql); a verifier trusts only the keys it is
  * handed.
  */
-
-// TEMP: replace with import from ./canonical.js at integration
-// RFC 8785, restricted: null, booleans, safe integers, well-formed strings,
-// arrays, and objects with keys sorted by UTF-16 code units. Anything else throws.
-const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
-function canonicalJsonV2(value: unknown): string {
-  if (value === null || typeof value === 'boolean') return JSON.stringify(value);
-  if (typeof value === 'number') {
-    if (!Number.isSafeInteger(value))
-      throw new Error('canonical json: number is not a safe integer');
-    return JSON.stringify(value === 0 ? 0 : value);
-  }
-  if (typeof value === 'string') {
-    if (LONE_SURROGATE.test(value)) throw new Error('canonical json: string is not well formed');
-    return JSON.stringify(value);
-  }
-  if (Array.isArray(value)) return `[${value.map(canonicalJsonV2).join(',')}]`;
-  if (typeof value === 'object' && value !== undefined) {
-    const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) =>
-      a < b ? -1 : a > b ? 1 : 0,
-    );
-    return `{${entries.map(([k, v]) => `${canonicalJsonV2(k)}:${canonicalJsonV2(v)}`).join(',')}}`;
-  }
-  throw new Error('canonical json: value cannot be written');
-}
-
-// TEMP: replace with the export from ./ledger.js at integration
-const CHAIN_LOCK_NAME = 'wtfalch/audit chain';
 
 /** Leaves read per query while sealing. */
 const LEAF_PAGE = 5000;

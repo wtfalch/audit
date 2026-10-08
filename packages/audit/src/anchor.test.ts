@@ -22,7 +22,6 @@ import {
   sequence,
 } from './der.js';
 import { type Fixture, writeFixture } from './test/bundle-fixture.js';
-import { createCheckpointsStandin, insertStandinCheckpoint } from './test/checkpoints-standin.js';
 import { type TestDb, sources, testDb } from './test/db.js';
 import { type FakeTsa, fakeTsa } from './test/tsa.js';
 
@@ -43,11 +42,8 @@ afterAll(async () => {
 });
 beforeEach(async () => {
   t = await testDb();
-  await createCheckpointsStandin(t);
   fx = writeFixture({ sizes: [2, 4, 6] });
-  for (const cp of fx.checkpoints) {
-    await insertStandinCheckpoint(t, cp as Parameters<typeof insertStandinCheckpoint>[1]);
-  }
+  await insertCheckpoints(t, fx);
   scratch = mkdtempSync(join(tmpdir(), 'audit-anchor-'));
 });
 afterEach(async () => {
@@ -56,6 +52,22 @@ afterEach(async () => {
   rmSync(scratch, { recursive: true, force: true });
   rmSync(join(fx.dir, '..'), { recursive: true, force: true });
 });
+
+/** The fixture's key and checkpoints as rows in the real tables, hashes and signatures as the fixture made them. */
+async function insertCheckpoints(db: TestDb, fixture: Fixture): Promise<void> {
+  const [key] = fixture.keys;
+  await db.exec(
+    `insert into audit_signing_keys (public_key, created_at) values ('${key?.public_key}', '${key?.created_at}')`,
+  );
+  for (const cp of fixture.checkpoints) {
+    await db.exec(`
+      insert into audit_checkpoints
+        (v, ledger, tree_size, root, prev_checkpoint, created_at, checkpoint_hash, signature, public_key, frontier)
+      values (1, 'test-ledger', ${cp.tree_size}, '${cp.root}',
+        ${cp.prev_checkpoint === null ? 'null' : `'${cp.prev_checkpoint}'`},
+        '${cp.created_at}', '${cp.checkpoint_hash}', '${cp.signature}', '${cp.public_key}', '[]')`);
+  }
+}
 
 const options = () => ({ tsaUrl: 'https://tsa.test/ts', provider: 'fake', fetch: tsa.fetch });
 const rootsFile = (pem: string) => {
