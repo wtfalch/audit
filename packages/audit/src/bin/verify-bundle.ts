@@ -27,12 +27,17 @@ import { pathToFileURL } from 'node:url';
  */
 const USAGE =
   'usage: audit-verify-bundle <dir> [--keys <file>] [--tsa-roots <pem file>] [--extends <older dir>]\n' +
+  '                           [--ledger <name>]\n' +
   '  --keys       JSON array of {public_key, created_at, retired_at}: the signing keys you trust.\n' +
   "               Without it the bundle's own keys are used and the verdict is at best UNCONFIRMED\n" +
   '  --tsa-roots  PEM file of the timestamp authority roots you trust (needed to confirm anchors)\n' +
-  '  --extends    an older bundle, from row 1, that this one must extend without rewriting it';
+  '  --extends    an older bundle, from row 1, that this one must extend without rewriting it\n' +
+  '  --ledger     the ledger name you expect: a bundle of another ledger fails\n' +
+  '  An empty value for any option is an error';
 
 const FORMAT = 'wtfalch-audit-evidence/1';
+/** The ledger name is printed, so it is 1 to 256 printable characters. */
+const LEDGER_NAME = /^(?:[^\p{C}\p{Z}]| ){1,256}$/u;
 
 export type Verdict = 'PASS' | 'FAIL' | 'UNCONFIRMED';
 export interface VerifyOptions {
@@ -42,6 +47,8 @@ export interface VerifyOptions {
   readonly tsaRoots?: string;
   /** Directory of an older bundle this one must extend. */
   readonly extends?: string;
+  /** The ledger the auditor means: a bundle of another ledger fails. */
+  readonly ledger?: string;
 }
 export interface VerifyResult {
   readonly verdict: Verdict;
@@ -565,6 +572,7 @@ interface Inspected {
   lines: string[];
   anchors: number;
   from: number;
+  ledger: string;
   /** The newest checkpoint's size and root, as the bundle states them. */
   last: { size: number; root: string } | null;
   roots: Map<number, string>;
@@ -596,6 +604,7 @@ function inspect(
   const range = manifest.range;
   if (
     typeof manifest.ledger !== 'string' ||
+    !LEDGER_NAME.test(manifest.ledger) ||
     !isObj(range) ||
     !isInt(range.from) ||
     !isInt(range.to) ||
@@ -607,11 +616,12 @@ function inspect(
   }
   const { from, to } = range as { from: number; to: number };
   const ledger = manifest.ledger;
-  const trusted = options.keys
-    ? readKeys(readJson(options.keys, 'the keys file'), 'the keys file')
-    : readKeys(manifest.signing_keys, 'manifest signing_keys');
+  const trusted =
+    options.keys !== undefined
+      ? readKeys(readJson(options.keys, 'the keys file'), 'the keys file')
+      : readKeys(manifest.signing_keys, 'manifest signing_keys');
 
-  const tsaRoots = options.tsaRoots ? loadRoots(options.tsaRoots) : null;
+  const tsaRoots = options.tsaRoots !== undefined ? loadRoots(options.tsaRoots) : null;
   const eventsText = readText(join(dir, 'events.ndjson'), 'events.ndjson');
   const cpFile = readJson(join(dir, 'checkpoints.json'), 'checkpoints.json');
   const anchorFile = readJson(join(dir, 'anchors.json'), 'anchors.json');
@@ -623,10 +633,11 @@ function inspect(
   }
 
   const anchorList: unknown[] = anchorFile.anchors;
-  lines.push(`format: ${FORMAT}, ledger rows ${from} to ${to}`);
+  lines.push(`format: ${FORMAT}, ledger ${ledger}, rows ${from} to ${to}`);
 
   // Each event: shape, canonical text, content hash, row hash, erasure.
   const events: (Obj | null)[] = [];
+  let erased = 0;
   const label = (ev: Obj | null, index: number): string =>
     ev !== null && isInt(ev.seq) ? `seq ${ev.seq}` : `event line ${index + 1}`;
   group('events', () => {
@@ -678,11 +689,21 @@ function inspect(
         if (sha256hex(String(ev.content_salt) + content) !== ev.content_hash) {
           failures.push(`${at}: content_hash does not match the content`);
         }
-      } else if (
-        ev.erased_at === null ||
-        ev.erasure_hash !== sha256hex(canon({ row_hash: ev.row_hash, erased_at: ev.erased_at }))
-      ) {
-        failures.push(`${at}: erased row without a valid erasure_hash`);
+      } else {
+        erased += 1;
+        if (
+          ev.erased_at === null ||
+          ev.erasure_hash !== sha256hex(canon({ row_hash: ev.row_hash, erased_at: ev.erased_at }))
+        ) {
+          failures.push(`${at}: erased row without a valid erasure_hash`);
+        }
+        // erasure_hash covers public values, so the payloads must be what
+        // audit_erase_person leaves: null or the marker, nothing else.
+        const bare = (value: unknown): boolean =>
+          value === null || canon(value) === '{"erased":true}';
+        if (!bare(ev.before) || !bare(ev.after)) {
+          failures.push(`${at}: an erased row holds a payload`);
+        }
       }
       const hashed: Obj = { v: 2 };
       for (const key of ROW_KEYS) hashed[key] = ev[key];
@@ -691,6 +712,10 @@ function inspect(
       }
     });
   });
+
+  if (erased > 0) {
+    lines.push(`erased rows: ${erased} (their display names and payloads are not covered)`);
+  }
 
   // seq dense over the range, each row linked to the one before.
   group('sequence', () => {
@@ -877,12 +902,21 @@ function inspect(
     lines,
     anchors: anchors.length,
     from,
+    ledger,
     last: lastSize > 0 ? { size: lastSize, root: String(checkpoints.at(-1)?.root) } : null,
     roots,
   };
 }
 
 export function verifyBundle(dir: string, options: VerifyOptions = {}): VerifyResult {
+  for (const [flag, value] of Object.entries({
+    '--keys': options.keys,
+    '--tsa-roots': options.tsaRoots,
+    '--extends': options.extends,
+    '--ledger': options.ledger,
+  })) {
+    if (value === '') throw new BundleError(`${flag} needs a value`);
+  }
   const own = { keys: options.keys, tsaRoots: options.tsaRoots };
   let older: Inspected | null = null;
   let olderFailures: string[] = [];
@@ -893,6 +927,9 @@ export function verifyBundle(dir: string, options: VerifyOptions = {}): VerifyRe
   const result = inspect(dir, own, older?.last?.size ?? null);
   const failures = [...olderFailures, ...result.failures];
   const lines = [...result.lines];
+  if (options.ledger !== undefined && options.ledger !== result.ledger) {
+    failures.push('ledger: not the ledger asked for');
+  }
   if (older !== null) {
     const before = failures.length;
     if (result.from !== 1 || older.from !== 1) {
@@ -920,11 +957,11 @@ function parse(argv: readonly string[]) {
       positional.push(arg);
       continue;
     }
-    if (!['--keys', '--tsa-roots', '--extends'].includes(arg)) {
+    if (!['--keys', '--tsa-roots', '--extends', '--ledger'].includes(arg)) {
       throw new BundleError(`unknown argument ${arg}`);
     }
     const value = argv[i + 1];
-    if (value === undefined || value.startsWith('--'))
+    if (value === undefined || value === '' || value.startsWith('--'))
       throw new BundleError(`${arg} needs a value`);
     values[arg] = value;
     i += 1;
@@ -937,6 +974,7 @@ function parse(argv: readonly string[]) {
       keys: values['--keys'],
       tsaRoots: values['--tsa-roots'],
       extends: values['--extends'],
+      ledger: values['--ledger'],
     },
   };
 }

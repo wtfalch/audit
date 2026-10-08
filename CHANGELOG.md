@@ -18,6 +18,10 @@
   `audit_signing_keys`, `audit_retire_signing_key()`) and `0009_anchors.sql`
   (`audit_anchors`). Apply them before deploying: `sign()` with `hashChain`
   fails without 0007.
+- **Breaking, no overlap with an older writer.** Once the first format 2 row is
+  written, a writer on the older package version fails on every `sign()` until
+  it is replaced (0007 refuses its sealed format 1 row). Deploy without
+  overlap, or accept failed writes during it.
 - **Breaking, new grants.** The host's `ensureRuntimeRole` call adds
   `audit_chain_tail_v2()`, `audit_chain_leaves(bigint, integer)` and
   `audit_retire_signing_key(text)` to `grants`, and `audit_checkpoints`,

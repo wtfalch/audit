@@ -548,6 +548,26 @@ describe('main', () => {
     const message = run(fx.dir).err;
     expect(message).toContain('error: unknown bundle format');
   });
+
+  it('exits 2 on an empty --keys, --tsa-roots, --extends or --ledger', () => {
+    const fx = make();
+    for (const flag of ['--keys', '--tsa-roots', '--extends', '--ledger']) {
+      expect(run(fx.dir, flag, '').code).toBe(2);
+    }
+    expect(run(fx.dir, '--keys', '').err).toContain('error: --keys needs a value');
+  });
+
+  it('prints the ledger name in the first line and exits 1 on --ledger of another name', () => {
+    const fx = make();
+    const ok = run(fx.dir, '--keys', fx.keysFile, '--ledger', 'test-ledger');
+    expect(ok.code).toBe(0);
+    expect(ok.out.split('\n')[0]).toBe(
+      'format: wtfalch-audit-evidence/1, ledger test-ledger, rows 1 to 6',
+    );
+    const bad = run(fx.dir, '--keys', fx.keysFile, '--ledger', 'other-ledger');
+    expect(bad.code).toBe(1);
+    expect(bad.err).toContain('FAIL ledger: not the ledger asked for');
+  });
 });
 
 describe('the verifier source', () => {

@@ -9,7 +9,7 @@ import {
   shaHex,
   writeFixture,
 } from '../test/bundle-fixture.js';
-import { verifyBundle } from './verify-bundle.js';
+import { BundleError, verifyBundle } from './verify-bundle.js';
 
 /**
  * One test per check of the verifier, each built so that only that check can
@@ -341,5 +341,112 @@ describe('inputs an attacker would try', () => {
       ]),
     );
     expect(verify(fx, path).verdict).toBe('PASS');
+  });
+});
+
+describe('an empty option is an error, not "not given"', () => {
+  it('an empty keys path throws, so a made-up signing key cannot pass', () => {
+    const fx = make({ key: newKey() });
+    expect(() => verifyBundle(fx.dir, { keys: '' })).toThrow(
+      new BundleError('--keys needs a value'),
+    );
+  });
+
+  it('an empty tsaRoots path throws', () => {
+    const fx = make();
+    expect(() => verifyBundle(fx.dir, { keys: fx.keysFile, tsaRoots: '' })).toThrow(
+      new BundleError('--tsa-roots needs a value'),
+    );
+  });
+
+  it('an empty extends path or ledger name throws', () => {
+    const fx = make();
+    expect(() => verifyBundle(fx.dir, { keys: fx.keysFile, extends: '' })).toThrow(
+      new BundleError('--extends needs a value'),
+    );
+    expect(() => verifyBundle(fx.dir, { keys: fx.keysFile, ledger: '' })).toThrow(
+      new BundleError('--ledger needs a value'),
+    );
+  });
+});
+
+describe('erased rows', () => {
+  const erase = (ev: Obj): void => {
+    ev.content_salt = null;
+    ev.erased_at = '2026-10-02T00:00:00.000Z';
+    ev.erasure_hash = shaHex(canonical({ row_hash: ev.row_hash, erased_at: ev.erased_at }));
+  };
+
+  it('a row with its content replaced and then marked erased fails', () => {
+    const fx = make();
+    editEvent(fx, 3, (ev) => {
+      erase(ev);
+      ev.after = { n: 1000000 };
+    });
+    expect(verify(fx).failures).toEqual(['seq 3: an erased row holds a payload']);
+  });
+
+  it('a replaced before fails the same way', () => {
+    const fx = make();
+    editEvent(fx, 3, (ev) => {
+      erase(ev);
+      ev.after = null;
+      ev.before = { erased: false };
+    });
+    expect(verify(fx).failures).toEqual(['seq 3: an erased row holds a payload']);
+  });
+
+  it('a row erased as the database does it passes, with null or the erased marker', () => {
+    const fx = make({ erase: [2] });
+    editEvent(fx, 2, (ev) => {
+      ev.before = { erased: true };
+      ev.after = { erased: true };
+    });
+    editEvent(fx, 4, (ev) => {
+      erase(ev);
+      ev.before = null;
+      ev.after = null;
+    });
+    const result = verify(fx);
+    expect(result.failures).toEqual([]);
+    expect(result.verdict).toBe('PASS');
+  });
+
+  it('prints how many rows are erased, and nothing when none are', () => {
+    const line = 'erased rows: 2 (their display names and payloads are not covered)';
+    expect(verify(make({ erase: [2, 5] })).lines).toContain(line);
+    expect(verify(make()).lines.some((l) => l.startsWith('erased rows'))).toBe(false);
+  });
+});
+
+describe('the ledger name', () => {
+  it('is in the first output line', () => {
+    expect(verify(make()).lines[0]).toBe(
+      'format: wtfalch-audit-evidence/1, ledger test-ledger, rows 1 to 6',
+    );
+  });
+
+  it('a mismatch with the ledger asked for fails with fixed text', () => {
+    const fx = make();
+    const result = verifyBundle(fx.dir, { keys: fx.keysFile, ledger: 'ledger-b' });
+    expect(result.verdict).toBe('FAIL');
+    expect(result.failures).toEqual(['ledger: not the ledger asked for']);
+  });
+
+  it('a match passes', () => {
+    const fx = make();
+    const result = verifyBundle(fx.dir, { keys: fx.keysFile, ledger: 'test-ledger' });
+    expect(result.failures).toEqual([]);
+    expect(result.verdict).toBe('PASS');
+  });
+
+  it('a name that is empty, too long or not printable makes the manifest malformed', () => {
+    for (const name of ['', 'x'.repeat(257), 'a\nb', 'a\u001b[31mb', 7]) {
+      const fx = make();
+      editJson(fx, 'manifest.json', (m) => {
+        m.ledger = name;
+      });
+      expect(() => verify(fx)).toThrow(new BundleError('manifest.json is malformed'));
+    }
   });
 });

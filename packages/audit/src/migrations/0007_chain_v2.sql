@@ -111,3 +111,35 @@ as $$
    limit max_rows
 $$;
 revoke all on function audit_chain_leaves(bigint, int) from public;
+
+-- A rolling deploy can leave a writer on the older package version running
+-- after this applies. Its sign() inserts a sealed format 1 row (row_hash set,
+-- chain_version null); after the first format 2 row that row would break the
+-- chain for good (verifyChain reports its seq, a bundle breaks at it). So the
+-- insert is refused, with fixed text, once any format 2 row exists. An
+-- unsealed row (row_hash null) and a format 1 row before the first format 2
+-- row are untouched. security definer for the reason audit_chain_tail() is
+-- (0005): the exists must see every tenant's rows whatever the inserting
+-- transaction is scoped to. It costs one index probe on audit_events_seq_idx
+-- per sealed format 1 insert, and nothing on a format 2 row or an unsealed
+-- row. Creating the trigger takes a brief lock and reads no row, so it is safe
+-- at container start on a live table.
+create or replace function audit_events_refuse_v1() returns trigger
+language plpgsql
+security definer
+set search_path from current
+as $$
+begin
+  if new.row_hash is not null and new.chain_version is null
+    and exists (select 1 from audit_events where seq is not null)
+  then
+    raise exception 'audit_events: a sealed format 1 row after a format 2 row is refused';
+  end if;
+  return new;
+end
+$$;
+revoke all on function audit_events_refuse_v1() from public;
+drop trigger if exists audit_events_refuse_v1 on audit_events;
+create trigger audit_events_refuse_v1
+  before insert on audit_events
+  for each row execute function audit_events_refuse_v1();

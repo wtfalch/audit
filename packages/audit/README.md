@@ -408,6 +408,10 @@ the three new functions.
 - Rows written before 0007 stay as they are and keep verifying as format 1.
   `verifyChain` and `verifyTable` check a table with both. The first format 2
   row links to the last format 1 row. Checkpoints cover the format 2 rows only.
+- Once the first format 2 row is written, a writer on the older package
+  version fails on every `sign()` until it is replaced: 0007 refuses the
+  sealed format 1 row it inserts, because that row would break the chain for
+  good. Deploy without overlap, or accept failed writes during it.
 
 ### Sealing
 
@@ -534,13 +538,20 @@ and `manifest.json` is written last, so a bundle cut short has no manifest.
 An auditor checks it with a program that imports nothing but `node:` modules:
 
 ```sh
-audit-verify-bundle ./bundle-2026-10 --keys ./trusted-keys.json --tsa-roots ./tsa-roots.pem
+audit-verify-bundle ./bundle-2026-10 --keys ./trusted-keys.json --tsa-roots ./tsa-roots.pem \
+  --ledger orders
 ```
+
+The first output line names the ledger, as the bundle states it.
 
 - `--keys` is a JSON array of `{ public_key, created_at, retired_at }`: the
   signing keys you trust, kept somewhere the database cannot write. It
   replaces the keys inside the bundle.
 - `--tsa-roots` is a PEM file of the timestamp authority's root certificates.
+- `--ledger <name>` is the ledger you mean. A bundle of another ledger fails,
+  even when both are signed by the same key.
+- An empty value for any option, such as an unset shell variable, is an error
+  (exit 2), not "not given".
 - `--extends <older dir>` also checks that this bundle continues an older one
   that starts at row 1, so a bundle you kept earlier shows the history was not
   rewritten since.
@@ -573,11 +584,17 @@ It does not prove:
   nothing about rows 1 to 399 unless you also hold, or `--extends`, a bundle
   from row 1;
 - anything about rows written after the last checkpoint;
-- who the actors are. `actor_id` and `actor_display` are what the host wrote.
+- who the actors are. `actor_id` and `actor_display` are what the host wrote;
+- the display names of an erased row. For an erased row a pass covers the fact
+  and time of erasure and the row's other fields, not `actor_display` or
+  `target_display`, and its `before` and `after` can only be null or the
+  erased marker `{"erased":true}`. The verifier prints how many rows are erased.
 
-Someone who holds both the database and the signing key can rewrite the table
-and seal new checkpoints that pass. Only an anchor from before the rewrite, or
-a bundle you kept elsewhere (check the new one with `--extends`), catches that.
+Anyone who can write the database can change an erased row's display names
+without breaking a pass. Someone who holds both the database and the signing
+key can rewrite the rest of the table and seal new checkpoints that pass. Only
+an anchor from before the rewrite, or a bundle you kept elsewhere (check the
+new one with `--extends`), catches that.
 
 ## Reading across apps
 
