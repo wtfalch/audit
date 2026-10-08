@@ -179,17 +179,32 @@ describe('anchorCheckpoints', () => {
 
   it('opens no transaction during the call, and posts the query type with the timeout signal', async () => {
     const seen: { fresh: unknown; type: string | null; signal: boolean }[] = [];
+    let transactions = 0;
+    const spy = new Proxy(t.db, {
+      get(target, property) {
+        const value = Reflect.get(target, property, target);
+        if (property === 'transaction') {
+          return (...args: unknown[]) => {
+            transactions += 1;
+            return (value as (...a: unknown[]) => unknown).apply(target, args);
+          };
+        }
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
     const watching = (async (url: string, init: RequestInit) => {
-      // Outside a transaction a statement starts its own, so these two clocks agree.
+      // On a real server a statement outside a transaction starts its own, so these two clocks
+      // agree; PGlite's clocks can differ there, so the spy above covers it.
       const [row] = await t.query('select now() = statement_timestamp() as fresh');
       seen.push({
-        fresh: row?.fresh,
+        fresh: t.real ? row?.fresh : true,
         type: new Headers(init.headers).get('content-type'),
         signal: init.signal instanceof AbortSignal,
       });
+      expect(transactions).toBe(0);
       return tsa.fetch(url, init);
     }) as unknown as typeof fetch;
-    await anchorCheckpoints(t.db, { ...options(), fetch: watching });
+    await anchorCheckpoints(spy, { ...options(), fetch: watching });
     expect(seen).toHaveLength(3);
     for (const s of seen) {
       expect(s).toEqual({ fresh: true, type: 'application/timestamp-query', signal: true });
