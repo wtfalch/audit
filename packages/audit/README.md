@@ -33,7 +33,7 @@ pnpm add @wtfalch/audit @wtfalch/db@0.5.2
 
 The package ships SQL and never connects or migrates. The host installs
 `@wtfalch/db` 0.5.2 or later (this package declares it only as an optional peer, for the
-`audit-verify-chain` command), applies the SQL with the owner credential into
+`audit-verify-chain` and `audit-export-bundle` commands), applies the SQL with the owner credential into
 a schema of its own, then makes the runtime role. The runtime `searchPath`
 and `ensureRuntimeRole({ schemas })` must both cover that schema.
 
@@ -60,11 +60,15 @@ await ensureRuntimeRole({
   ownerUrl,
   runtimeUrl,
   schemas: ['orders'],
-  appendOnly: ['audit_events'], // insert and read only: UPDATE, DELETE and TRUNCATE revoked
-  grants: [ // the four security definer functions, schema-qualified
+  // insert and read only: UPDATE, DELETE and TRUNCATE revoked
+  appendOnly: ['audit_events', 'audit_checkpoints', 'audit_signing_keys', 'audit_anchors'],
+  grants: [ // the security definer functions, schema-qualified
     'orders.audit_erase_person(text, text, text)',
     'orders.audit_seal_erasure(bigint, text)',
     'orders.audit_chain_tail()',
+    'orders.audit_chain_tail_v2()',
+    'orders.audit_chain_leaves(bigint, integer)',
+    'orders.audit_retire_signing_key(text)',
     'orders.audit_pending_erasures()',
   ],
   settings: { 'audit.require_tenant': 'on' }, // without it an unscoped read sees every tenant's rows
@@ -373,6 +377,207 @@ one means a rewrite or a deletion:
 ```sql
 select count(*) from audit_events where row_hash = '<anchored head>';  -- 1 expected
 ```
+
+## Sealed checkpoints, anchors and bundles
+
+The chain catches an edit. It does not catch someone who rewrites the table
+and reseals every row after the edit. Checkpoints, anchors and bundles close
+that gap: the host signs the chain's state with a key the database does not
+hold, an outside clock timestamps the signature, and an auditor checks an
+exported file with a program that touches neither the database nor this
+package.
+
+### What format 2 changes for a host
+
+`hashChain` now writes row format 2. Apply migrations `0007_chain_v2.sql`,
+`0008_checkpoints.sql` and `0009_anchors.sql` before you deploy this version:
+`sign()` calls `audit_chain_tail_v2()` and writes three new columns
+(`chain_version`, `seq`, `received_at`), and fails without 0007. 0008 and
+0009 add tables and touch no existing row. Then run `ensureRuntimeRole`
+again with the lists in "Install": `audit_checkpoints`, `audit_signing_keys`
+and `audit_anchors` are append-only, and `audit_chain_tail_v2()`,
+`audit_chain_leaves(bigint, integer)` and `audit_retire_signing_key(text)` are
+the three new functions.
+
+- `before` and `after` take no float. A number must be a safe integer, or
+  `sign()` throws before it inserts anything. Write a price as a string or in
+  minor units.
+- A format 2 row has a gap-free `seq` (1 on the first format 2 row) and
+  `received_at`, the database clock to the millisecond. Both are in the row
+  hash.
+- Rows written before 0007 stay as they are and keep verifying as format 1.
+  `verifyChain` and `verifyTable` check a table with both. The first format 2
+  row links to the last format 1 row. Checkpoints cover the format 2 rows only.
+
+### Sealing
+
+`sealCheckpoint` folds every row written since the last checkpoint into one
+Merkle tree, covers the root with the ledger's name and the previous
+checkpoint, and has your signer sign that. Run it on a schedule. It returns
+the new checkpoint, or `null` when no row is new.
+
+A signer is a public key and a function. The private key stays on the other
+side of that function:
+
+```ts
+import { sealCheckpoint, type CheckpointSigner } from '@wtfalch/audit';
+
+// The key lives in a signing service on another host (an HSM, a key service,
+// or a small service of your own). This process can ask it to sign; it cannot
+// read the key.
+const signer: CheckpointSigner = {
+  publicKey: process.env.AUDIT_SIGNING_PUBLIC_KEY ?? '', // 64 hex, the raw Ed25519 key
+  async sign(message) {
+    const res = await fetch(process.env.AUDIT_SIGNING_URL ?? '', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${process.env.AUDIT_SIGNING_TOKEN}` },
+      body: message,
+    });
+    if (!res.ok) throw new Error('the signing service refused');
+    return new Uint8Array(await res.arrayBuffer()); // 64 bytes
+  },
+};
+
+const checkpoint = await sealCheckpoint(adminDb, { ledger: 'orders', signer });
+```
+
+Say it plainly: a key the app process holds can be used by anyone who
+compromises the app. If the key is an environment variable or a file the app
+reads, an attacker who gets into the app can sign a checkpoint over rewritten
+rows and no check will tell the two apart. Keep the key where the app can ask
+for a signature but cannot read the key. Then a compromise of the app and the
+database still needs a second break-in to forge a checkpoint.
+
+The seal runs in one transaction that holds the chain's advisory lock, and
+your signer is called inside it. `sign()` waits while a seal runs, so keep
+the signer fast. Pass a handle that can call `audit_chain_leaves` (the
+runtime role can) and keep the `ledger` name the same on every call: it is
+inside the checkpoint hash, and `sealCheckpoint` refuses a different one.
+
+The database also keeps the public key in `audit_signing_keys`, as a
+convenience. A verifier never trusts those rows; it trusts the keys you hand
+it.
+
+### Retiring a key
+
+`retireSigningKey(handle, publicKey)` stamps the key retired with the
+database clock. `sealCheckpoint` refuses that key from then on, and a
+verifier rejects a checkpoint dated after the key's `retired_at`. To rotate,
+retire the old key, then seal with a new signer: the new checkpoint links to
+the old one, so the chain carries on. A key row is never deleted or changed
+again. A key that leaked is not made safe by retiring it: checkpoints it
+signed before you noticed still carry its signature, so anchor (below) or
+keep a bundle outside the database.
+
+### Anchoring
+
+`anchorCheckpoints` asks an outside timestamp authority (RFC 3161) to sign
+each checkpoint's hash with its own clock, and stores the answer in
+`audit_anchors`. The authority then vouches that the checkpoint existed at
+that time. Someone who later holds both your database and your signing key
+cannot back-date a rewrite past it.
+
+```ts
+import { anchorCheckpoints } from '@wtfalch/audit';
+
+await anchorCheckpoints(adminDb, { tsaUrl: 'https://tsa.example.com/ts', provider: 'tsa-main' });
+```
+
+This function calls an outside service. The hash of each checkpoint leaves
+your system and nothing else does: no row, no tenant, no name. It anchors
+every checkpoint that provider has not stamped yet, one request each, with no
+database transaction open during the call. A checkpoint that fails does not
+stop the rest; the function throws at the end, naming how many failed, and a
+later run picks up only those. The `provider` is a name of your choosing, so a
+second authority can stamp the same checkpoint. The stored token is not
+checked here; the verifier checks it against the roots you supply.
+
+### Proofs
+
+For one row, without handing over the others:
+
+- `proveInclusion(handle, seq)` returns the path from the row to the root of
+  the first checkpoint that covers it, with that checkpoint.
+  `verifyInclusion(proof)` checks the path; `verifyCheckpoint(checkpoint,
+  keys)` checks the checkpoint's hash, signature and the key's window.
+- `proveConsistency(handle, fromSize, toSize)` returns the nodes that show the
+  older tree is a prefix of the newer one. `verifyConsistency(proof, fromRoot,
+  toRoot)` checks them.
+
+Both read the leaf hashes again from the database, up to the checkpoint's
+size; nothing else is stored.
+
+### Exporting and verifying a bundle
+
+A bundle is a directory of four files: `manifest.json`, `events.ndjson`,
+`checkpoints.json` and `anchors.json`. It holds a range of rows (every field,
+including `before` and `after` for rows not erased), the checkpoints that cover
+them, and the anchors. Treat it as sensitive as the table.
+
+```sh
+DATABASE_URL="$ADMIN_DATABASE_URL" pnpm exec audit-export-bundle \
+  --schema orders --ledger orders --out ./bundle-2026-10
+```
+
+`--out` must be a new or empty directory. `--from` and `--to` pick a range of
+`seq` values: `to` is a checkpoint's size, and `from` is 1 or one more than a
+checkpoint's size. Without them the bundle runs from row 1 to the newest
+checkpoint. It exits 0 when written, 1 when it refuses (no checkpoint, a range
+off the checkpoint boundaries, a ledger name that is not the checkpoints', or
+a row erased but not yet sealed: run `ledger.erase()` again, which seals it),
+and 2 when it could not run (bad arguments, no connection, `--out` not empty
+or not writable). It reads every row, so connect as the table's owner or an
+admin, as for `audit-verify-chain`. It builds the whole bundle in memory before
+it writes a file; if a write fails it removes the files it wrote and exits 2,
+and `manifest.json` is written last, so a bundle cut short has no manifest.
+
+An auditor checks it with a program that imports nothing but `node:` modules:
+
+```sh
+audit-verify-bundle ./bundle-2026-10 --keys ./trusted-keys.json --tsa-roots ./tsa-roots.pem
+```
+
+- `--keys` is a JSON array of `{ public_key, created_at, retired_at }`: the
+  signing keys you trust, kept somewhere the database cannot write. It
+  replaces the keys inside the bundle.
+- `--tsa-roots` is a PEM file of the timestamp authority's root certificates.
+- `--extends <older dir>` also checks that this bundle continues an older one
+  that starts at row 1, so a bundle you kept earlier shows the history was not
+  rewritten since.
+
+| Exit | Meaning |
+| --- | --- |
+| 0 | Pass. Every check held and the keys came from `--keys`; any anchors were checked against `--tsa-roots`. |
+| 1 | Fail. A check failed; each failure is printed with its `seq` or `checkpoint_hash`. |
+| 2 | Error. Bad arguments, an unreadable bundle, an unknown format. |
+| 3 | Unconfirmed. Every check held, but the keys came only from the bundle, or the bundle has anchors and no `--tsa-roots` was given. |
+
+Exit 3 is not a pass: a bundle can carry its own keys, and anyone can sign a
+bundle with a key they made up.
+
+### What a pass proves, and what it does not
+
+A pass proves:
+
+- no event in the range changed, and none was removed, inserted or reordered;
+- the checkpoints chain to one another, and each signature is from a trusted
+  key inside that key's window;
+- with `--tsa-roots`, the timestamp authority saw each anchored checkpoint by
+  the time in its token.
+
+It does not prove:
+
+- that the events were true. The ledger records what the host's signer was
+  told;
+- that the range is the whole history. A bundle for rows 400 to 900 says
+  nothing about rows 1 to 399 unless you also hold, or `--extends`, a bundle
+  from row 1;
+- anything about rows written after the last checkpoint;
+- who the actors are. `actor_id` and `actor_display` are what the host wrote.
+
+Someone who holds both the database and the signing key can rewrite the table
+and seal new checkpoints that pass. Only an anchor from before the rewrite, or
+a bundle you kept elsewhere (check the new one with `--extends`), catches that.
 
 ## Reading across apps
 

@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.13.0 — unreleased
+
+0.12.0 is skipped: another open change claims that number.
+
+- **Breaking, `hashChain` writes row format 2.** A row carries `chain_version`
+  2, a gap-free `seq` and `received_at` (the database clock to the
+  millisecond), and its hash covers both. The salted content hash and the
+  erasure hash are canonical JSON v2 (RFC 8785, restricted). Rows written in
+  format 1 keep verifying; `verifyChain` and `verifyTable` check a table with
+  both, and the first format 2 row links to the last format 1 row.
+- **Breaking, `sign()` with `hashChain` on refuses a float** in `before` or
+  `after`. A number must be a safe integer; it throws before any insert.
+- **Breaking, three migrations.** `0007_chain_v2.sql` (three nullable columns on
+  `audit_events`, a unique `seq`, `audit_chain_tail_v2()`,
+  `audit_chain_leaves()`), `0008_checkpoints.sql` (`audit_checkpoints`,
+  `audit_signing_keys`, `audit_retire_signing_key()`) and `0009_anchors.sql`
+  (`audit_anchors`). Apply them before deploying: `sign()` with `hashChain`
+  fails without 0007.
+- **Breaking, new grants.** The host's `ensureRuntimeRole` call adds
+  `audit_chain_tail_v2()`, `audit_chain_leaves(bigint, integer)` and
+  `audit_retire_signing_key(text)` to `grants`, and `audit_checkpoints`,
+  `audit_signing_keys` and `audit_anchors` to `appendOnly`. See "Install".
+- `sealCheckpoint`, `retireSigningKey`, `verifyCheckpoint`, `listCheckpoints`:
+  signed Merkle checkpoints (RFC 6962) over the format 2 rows. The host passes
+  a `CheckpointSigner` whose private key stays outside this package.
+- `proveInclusion`, `verifyInclusion`, `proveConsistency`, `verifyConsistency`:
+  proofs for one row and between two checkpoints.
+- `anchorCheckpoints`: RFC 3161 timestamps of checkpoints from an outside
+  authority. Only each checkpoint's hash leaves the system.
+- `buildBundle` and `audit-export-bundle`: an evidence bundle for a range of
+  rows. `audit-verify-bundle` checks it offline with Node alone, and exits 0,
+  1, 2 or 3 (unconfirmed: keys or authority roots not supplied).
+- The root entry also exports `canonicalJsonV2`, `sealRowV2`, and the
+  `audit_checkpoints`, `audit_signing_keys` and `audit_anchors` tables.
+- README: "Sealed checkpoints, anchors and bundles", with what a pass proves
+  and what it does not.
+
 ## 0.11.1
 
 - The peer `@wtfalch/authz` widens from `^0.16.0` to `>=0.16.0 <0.18.0`. A host

@@ -187,10 +187,13 @@ export interface LedgerOptions {
    * detectable without trusting Postgres privileges alone. Off by default:
    * every `sign()` call then opens a transaction (a savepoint, if `handle`
    * already is one) and serializes against the chain's advisory lock, which
-   * a host that does not need tamper evidence should not pay for. Needs
-   * `migrations/0004_chain.sql`; a row written before it, or before this was
-   * turned on, has no hash and `verifyChain` reports it unsealed rather than
-   * verified.
+   * a host that does not need tamper evidence should not pay for. Writes
+   * row format 2 and needs `migrations/0004_chain.sql` through
+   * `0007_chain_v2.sql` (0008 and 0009 add checkpoints and anchors); it
+   * refuses a non-integer number in `before` or `after`. A row written before
+   * 0007 keeps verifying as format 1; a row written before 0004, or before
+   * this was turned on, has no hash and `verifyChain` reports it unsealed
+   * rather than verified.
    */
   readonly hashChain?: boolean;
   /**
