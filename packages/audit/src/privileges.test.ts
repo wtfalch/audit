@@ -90,6 +90,7 @@ describe.skipIf(!url)('runtime role', () => {
       'audit_chain_tail',
       'audit_chain_tail_v2',
       'audit_erase_person',
+      'audit_events_refuse_v1',
       'audit_pending_erasures',
       'audit_retire_signing_key',
       'audit_seal_erasure',
