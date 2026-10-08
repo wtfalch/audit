@@ -1,7 +1,7 @@
 import type { AccessResource, ResourceAccess } from '@wtfalch/authz';
 import { and, asc, desc, eq, gte, like, lt, lte, or, sql } from 'drizzle-orm';
 import type { PgDatabase, PgQueryResultHKT } from 'drizzle-orm/pg-core';
-import { computeErasureHash, sealRow } from './chain.js';
+import { computeErasureHash, sealRowV2 } from './chain.js';
 import { assertRuntimeRole } from './runtime-role-guard.js';
 import { type AuditRow, rowSchema } from './schema.js';
 import { resultRows } from './sql-result.js';
@@ -187,10 +187,13 @@ export interface LedgerOptions {
    * detectable without trusting Postgres privileges alone. Off by default:
    * every `sign()` call then opens a transaction (a savepoint, if `handle`
    * already is one) and serializes against the chain's advisory lock, which
-   * a host that does not need tamper evidence should not pay for. Needs
-   * `migrations/0004_chain.sql`; a row written before it, or before this was
-   * turned on, has no hash and `verifyChain` reports it unsealed rather than
-   * verified.
+   * a host that does not need tamper evidence should not pay for. Writes
+   * row format 2 and needs `migrations/0004_chain.sql` through
+   * `0007_chain_v2.sql` (0008 and 0009 add checkpoints and anchors); it
+   * refuses a non-integer number in `before` or `after`. A row written before
+   * 0007 keeps verifying as format 1; a row written before 0004, or before
+   * this was turned on, has no hash and `verifyChain` reports it unsealed
+   * rather than verified.
    */
   readonly hashChain?: boolean;
   /**
@@ -251,7 +254,7 @@ const LEDGER_KEYS = new Set(Object.keys(auditEvents_));
 // never be sealed onto the same tail at once. hashtextextended computes it
 // from the name at call time rather than a hard-coded number, so the name
 // is what a reader checks, not an opaque bigint.
-const CHAIN_LOCK_NAME = 'wtfalch/audit chain';
+export const CHAIN_LOCK_NAME = 'wtfalch/audit chain';
 
 /**
  * Scopes every read of `audit_events` on `tx` to one tenant, for the rest of
@@ -269,6 +272,22 @@ export async function scopeAuditTenant(tx: Handle, tenantId: string): Promise<vo
     throw new Error('audit: scopeAuditTenant: an empty tenant id would unscope, not scope');
   }
   await tx.execute(sql`select set_config('audit.tenant_id', ${tenantId}, true)`);
+}
+
+function assertSafeIntegers(field: string, value: unknown, path = field): void {
+  if (typeof value === 'number') {
+    if (!Number.isSafeInteger(value)) {
+      throw new Error(
+        `audit: "${path}" holds ${value}, which is not a safe integer; a chained ledger takes no floats in ${field} (write it as a string or in minor units)`,
+      );
+    }
+  } else if (Array.isArray(value)) {
+    value.forEach((item, i) => assertSafeIntegers(field, item, `${path}[${i}]`));
+  } else if (value !== null && typeof value === 'object') {
+    for (const [key, item] of Object.entries(value)) {
+      assertSafeIntegers(field, item, `${path}.${key}`);
+    }
+  }
 }
 
 export function createLedger(options: LedgerOptions): Ledger {
@@ -368,28 +387,42 @@ export function createLedger(options: LedgerOptions): Ledger {
       await handle.insert(auditEvents).values(values);
       return;
     }
+    // Format 2 writes no float; refuse it here, by field, before a lock or an insert.
+    assertSafeIntegers('before', row.before);
+    assertSafeIntegers('after', row.after);
     // The lock, the tail read and the insert all happen on `tx`: a plain
     // handle opens a real transaction, a handle that is already one (the
     // caller's own) opens a savepoint, so either way the lock is held for
     // exactly this row's seal-and-insert and released at commit.
     await handle.transaction(async (tx) => {
       await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${CHAIN_LOCK_NAME}, 0))`);
-      // Through audit_chain_tail() (security definer, 0005_rls.sql), not a
-      // select on the table: under a tenant scope RLS hides every other
-      // tenant's rows, and the chain is one chain across all of them.
-      const [tail] = resultRows<{ h: string | null }>(
-        await tx.execute(sql`select audit_chain_tail() as h`),
-      );
-      const sealed = await sealRow(
+      // Through audit_chain_tail_v2() (security definer, 0007_chain_v2.sql),
+      // not a select on the table: under a tenant scope RLS hides every other
+      // tenant's rows, and the chain is one chain across all of them. It
+      // answers seq, the newest row's hash and the database clock in one
+      // read; bigint comes back as a string or a number depending on the
+      // driver.
+      const [tail] = resultRows<{
+        seq: number | string | null;
+        row_hash: string | null;
+        received_at: Date | string;
+      }>(await tx.execute(sql`select seq, row_hash, received_at from audit_chain_tail_v2()`));
+      if (!tail) throw new Error('audit: audit_chain_tail_v2() returned no row');
+      const sealed = await sealRowV2(
         {
           ...row,
           target_display: row.target_display ?? null,
           tenant_display: row.tenant_display ?? null,
         },
-        tail?.h ?? null,
+        tail.row_hash,
+        Number(tail.seq ?? 0) + 1,
+        tail.received_at instanceof Date ? tail.received_at : new Date(tail.received_at),
       );
       await tx.insert(auditEvents).values({
         ...values,
+        chainVersion: sealed.chain_version,
+        seq: sealed.seq,
+        receivedAt: sealed.received_at,
         prevHash: sealed.prev_hash,
         rowHash: sealed.row_hash,
         contentHash: sealed.content_hash,

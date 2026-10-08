@@ -1,5 +1,11 @@
+import { generateKeyPairSync, sign as nodeSign } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
-import { type RuntimeRoleDb, withRuntimeRole } from './test/db.js';
+import { anchorCheckpoints } from './anchor.js';
+import { retireSigningKey, sealCheckpoint } from './checkpoint.js';
+import { createLedger } from './ledger.js';
+import { CORE, type RuntimeRoleDb, withRuntimeRole } from './test/db.js';
+import { fakeTsa } from './test/tsa.js';
+import { ledgerVocabularyFromCore } from './vocabulary.js';
 
 /**
  * The runtime-role wall, on a real Postgres only: PGlite has one role. With
@@ -80,9 +86,13 @@ describe.skipIf(!url)('runtime role', () => {
         where prosecdef and pronamespace = '${t.schema}'::regnamespace order by 1`,
     );
     expect(rows.map((row) => row.proname)).toEqual([
+      'audit_chain_leaves',
       'audit_chain_tail',
+      'audit_chain_tail_v2',
       'audit_erase_person',
+      'audit_events_refuse_v1',
       'audit_pending_erasures',
+      'audit_retire_signing_key',
       'audit_seal_erasure',
     ]);
     for (const row of rows) {
@@ -110,4 +120,53 @@ describe.skipIf(!url)('runtime role', () => {
     const [row] = await t.owner.database.query('select actor_display from audit_events');
     expect(row).toMatchObject({ actor_display: 'Erased' });
   });
+
+  it('may sign, seal, retire a key and anchor through the grants a host passes, and change none of it afterwards', async () => {
+    if (!url) return;
+    t = await withRuntimeRole(url);
+    const ledger = createLedger({
+      vocabulary: ledgerVocabularyFromCore(CORE, {}),
+      hashChain: true,
+      checkRuntimeRole: false,
+    });
+    const { publicKey, privateKey } = generateKeyPairSync('ed25519');
+    const spki = publicKey.export({ format: 'der', type: 'spki' });
+    const signer = {
+      publicKey: spki.subarray(spki.length - 32).toString('hex'),
+      sign: async (message: Uint8Array) => new Uint8Array(nodeSign(null, message, privateKey)),
+    };
+    await ledger.sign(t.runtimeDb, {
+      action: 'tenant.created',
+      tenantId: null,
+      actor: { class: 'human', id: 'u1', display: 'U' },
+      context: 'standard',
+      target: { type: 'tenant', id: 't1' },
+    });
+    const checkpoint = await sealCheckpoint(t.runtimeDb, { ledger: 'app', signer });
+    expect(checkpoint?.tree_size).toBe(1);
+    const tsa = await fakeTsa();
+    try {
+      expect(
+        await anchorCheckpoints(t.runtimeDb, {
+          tsaUrl: 'https://tsa.test/ts',
+          provider: 'fake',
+          fetch: tsa.fetch,
+        }),
+      ).toBe(1);
+    } finally {
+      await tsa.close();
+    }
+    await retireSigningKey(t.runtimeDb, signer.publicKey);
+    for (const [table, column] of [
+      ['audit_checkpoints', 'created_at'],
+      ['audit_signing_keys', 'created_at'],
+      ['audit_anchors', 'anchored_at'],
+    ]) {
+      await expect(asRt(t, `update ${table} set ${column} = ${column}`)).rejects.toThrow(
+        /permission denied/,
+      );
+      await expect(asRt(t, `delete from ${table}`)).rejects.toThrow(/permission denied/);
+      await expect(asRt(t, `truncate ${table}`)).rejects.toThrow(/permission denied/);
+    }
+  }, 30_000);
 });

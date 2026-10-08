@@ -63,6 +63,12 @@ export const AUDIT_COLUMNS = {
   contentHash: text('content_hash'),
   contentSalt: text('content_salt'),
   erasureHash: text('erasure_hash'),
+  // Row format 2 (migrations/0007_chain_v2.sql): 2 with a dense `seq` and the
+  // database clock's `received_at` on a row sealed by format 2, null on all
+  // three for a row sealed before it.
+  chainVersion: smallint('chain_version'),
+  seq: bigint('seq', { mode: 'number' }),
+  receivedAt: timestamp('received_at', { withTimezone: true }),
 };
 
 /** The indexes every ledger table carries, for a host declaring its own table over `AUDIT_COLUMNS`. */

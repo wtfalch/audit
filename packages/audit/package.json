@@ -1,6 +1,6 @@
 {
   "name": "@wtfalch/audit",
-  "version": "0.11.1",
+  "version": "0.13.0",
   "description": "The estate's append-only audit ledger: the table's shape and walls, erasure, export, readers and a cross-app read handler, with a signer a host builds once inside its trusted base and never exports. Per-app Postgres, a host-supplied vocabulary of closed sets, no framework.",
   "repository": {
     "type": "git",
@@ -12,7 +12,9 @@
   "files": ["dist"],
   "bin": {
     "audit-migrations": "dist/bin/migrations.js",
-    "audit-verify-chain": "dist/bin/verify-chain.js"
+    "audit-verify-chain": "dist/bin/verify-chain.js",
+    "audit-verify-bundle": "dist/bin/verify-bundle.js",
+    "audit-export-bundle": "dist/bin/export-bundle.js"
   },
   "exports": {
     ".": {

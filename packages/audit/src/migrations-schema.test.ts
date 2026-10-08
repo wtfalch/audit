@@ -31,10 +31,17 @@ describe('migrations in a named schema', () => {
     expect(where.rows.map((row) => row.table_schema)).toEqual(['svc']);
     const functions = await pglite.query<{ proname: string; schema: string; proconfig: string[] }>(
       `select proname, pronamespace::regnamespace::text as schema, proconfig from pg_proc
-        where proname in ('audit_erase_person', 'audit_seal_erasure', 'audit_chain_tail', 'audit_pending_erasures')
+        where proname in ('audit_erase_person', 'audit_seal_erasure', 'audit_chain_tail', 'audit_chain_tail_v2', 'audit_chain_leaves', 'audit_pending_erasures')
         order by 1`,
     );
-    expect(functions.rows.map((row) => row.schema)).toEqual(['svc', 'svc', 'svc', 'svc']);
+    expect(functions.rows.map((row) => row.schema)).toEqual([
+      'svc',
+      'svc',
+      'svc',
+      'svc',
+      'svc',
+      'svc',
+    ]);
     // Pinned to the schema the migration ran in (db 0.5.2 puts pg_temp last), which is what lets a security definer find its table.
     for (const row of functions.rows)
       expect(row.proconfig).toEqual(['search_path=svc, public, pg_temp']);

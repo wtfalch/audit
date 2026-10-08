@@ -1,3 +1,4 @@
+import { canonicalJsonV2 } from './canonical.js';
 import type { AuditEventRow } from './tables.js';
 
 /**
@@ -150,6 +151,64 @@ function rowHashPayload(row: SealInput, prevHash: string | null, contentHash: st
   };
 }
 
+/** The four columns `sealRowV2` computes, plus the three format 2 adds. */
+export interface SealedChainV2 extends SealedChain {
+  readonly chain_version: 2;
+  readonly seq: number;
+  readonly received_at: Date;
+}
+
+/** What a format 2 `content_hash` is taken over: the same erasable fields, written with `canonicalJsonV2`. */
+function contentPayloadV2(row: SealInput): string {
+  return canonicalJsonV2(contentPayload(row));
+}
+
+/**
+ * The format 2 `row_hash` payload: `v: 2`, `seq` and `received_at` ahead of
+ * the format 1 keys, written with `canonicalJsonV2`. `received_at` is the
+ * database clock to the millisecond, so it recomputes from a JS `Date`.
+ */
+function rowHashPayloadV2(
+  row: SealInput,
+  prevHash: string | null,
+  contentHash: string,
+  seq: number,
+  receivedAt: string | Date,
+): string {
+  return canonicalJsonV2({
+    v: 2,
+    seq,
+    received_at: new Date(receivedAt).toISOString(),
+    ...rowHashPayload(row, prevHash, contentHash),
+  });
+}
+
+/**
+ * `sealRow` for format 2. `seq` and `receivedAt` come from
+ * `audit_chain_tail_v2()` inside `sign()`'s advisory-locked transaction.
+ * Throws on a float or any value `canonicalJsonV2` refuses, before anything
+ * is inserted.
+ */
+export async function sealRowV2(
+  row: SealInput,
+  prevHash: string | null,
+  seq: number,
+  receivedAt: Date,
+): Promise<SealedChainV2> {
+  const contentSalt = randomHex(16);
+  const contentHash = await sha256Hex(contentSalt + contentPayloadV2(row));
+  const rowHash = await sha256Hex(rowHashPayloadV2(row, prevHash, contentHash, seq, receivedAt));
+  return {
+    chain_version: 2,
+    seq,
+    received_at: receivedAt,
+    prev_hash: prevHash,
+    row_hash: rowHash,
+    content_hash: contentHash,
+    content_salt: contentSalt,
+  };
+}
+
 /**
  * Seal one row before it is inserted: a fresh random `content_salt`,
  * `content_hash` over the salted erasable content, `row_hash` over
@@ -207,7 +266,7 @@ export type ChainVerifyResult =
       readonly ok: false;
       /** Position in `rows` sorted by `id` ascending, not in the array as given. */
       readonly index: number;
-      readonly reason: 'unsealed' | 'row_hash' | 'link' | 'content' | 'erasure' | 'head';
+      readonly reason: 'unsealed' | 'row_hash' | 'link' | 'content' | 'erasure' | 'head' | 'seq';
     };
 
 /**
@@ -237,6 +296,15 @@ export type ChainVerifyResult =
  * verifies `ok`. Cross-check an erased row's `erasedAt` against a
  * corresponding `person.erased` event before trusting *why*.
  *
+ * A row with `chainVersion` 2 is verified by format 2 (`sealRowV2`'s
+ * payloads); a row with none, by format 1; a run may hold both, format 1
+ * first. Across the boundary the link is the same: the first format 2 row's
+ * `prevHash` is the last format 1 row's `rowHash`. Format 2 `seq` must rise
+ * by one from row to row (`'seq'`), and from `options.seqOrigin` -- the
+ * `seq` of the format 2 row before the run, `0` for a run from the start --
+ * when that was given. A format 1 row after a format 2 row is `'seq'` too:
+ * it would sit outside the numbering.
+ *
  * `options.origin`, when given (including `null`), anchors the front of
  * the chain: the first row's `prevHash` must equal it. `options.head`,
  * when given, is compared against the last row's `rowHash` once every row
@@ -245,32 +313,57 @@ export type ChainVerifyResult =
  */
 export async function verifyChain(
   rows: readonly AuditEventRow[],
-  options: { head?: string; origin?: string | null } = {},
+  options: { head?: string; origin?: string | null; seqOrigin?: number } = {},
 ): Promise<ChainVerifyResult> {
   const ordered = [...rows].sort((a, b) => a.id - b.id);
   let previousRowHash: string | null = options.origin ?? null;
+  let previousSeq: number | undefined = options.seqOrigin;
+  let sawV2 = options.seqOrigin !== undefined && options.seqOrigin > 0;
   for (let index = 0; index < ordered.length; index++) {
     const row = ordered[index];
     if (!row) continue;
     const rowHash = row.rowHash;
     const contentHash = row.contentHash;
     if (rowHash === null || contentHash === null) return { ok: false, index, reason: 'unsealed' };
+    const v2 = row.chainVersion === 2;
+    // A format 2 row missing seq or received_at (the table's CHECK forbids it) falls to the format 1 payload and fails here.
     const recomputedRowHash = await sha256Hex(
-      canonicalJson(rowHashPayload(fromEventRow(row), row.prevHash, contentHash)),
+      v2 && row.seq !== null && row.receivedAt !== null
+        ? rowHashPayloadV2(fromEventRow(row), row.prevHash, contentHash, row.seq, row.receivedAt)
+        : canonicalJson(rowHashPayload(fromEventRow(row), row.prevHash, contentHash)),
     );
     if (recomputedRowHash !== rowHash) return { ok: false, index, reason: 'row_hash' };
     const checkLink = index > 0 || options.origin !== undefined;
     if (checkLink && (row.prevHash ?? null) !== previousRowHash) {
       return { ok: false, index, reason: 'link' };
     }
+    if (v2 && row.seq !== null) {
+      if (previousSeq !== undefined && row.seq !== previousSeq + 1) {
+        return { ok: false, index, reason: 'seq' };
+      }
+      previousSeq = row.seq;
+      sawV2 = true;
+    } else if (sawV2) {
+      return { ok: false, index, reason: 'seq' };
+    }
     const contentSalt = row.contentSalt;
     const erasedAt = row.erasedAt;
     const erasureHash = row.erasureHash;
     if (contentSalt !== null) {
       if (erasedAt !== null || erasureHash !== null) return { ok: false, index, reason: 'erasure' };
-      const recomputedContentHash = await sha256Hex(
-        contentSalt + canonicalJson(contentPayload(fromEventRow(row))),
-      );
+      let recomputedContentHash: string;
+      try {
+        recomputedContentHash = await sha256Hex(
+          contentSalt +
+            (v2
+              ? contentPayloadV2(fromEventRow(row))
+              : canonicalJson(contentPayload(fromEventRow(row)))),
+        );
+      } catch (error) {
+        // A format 2 payload edited to hold a float cannot be written canonically: it is a mismatch, not a crash.
+        if (!v2) throw error;
+        return { ok: false, index, reason: 'content' };
+      }
       if (recomputedContentHash !== contentHash) return { ok: false, index, reason: 'content' };
     } else {
       if (erasedAt === null || erasureHash === null) return { ok: false, index, reason: 'erasure' };
