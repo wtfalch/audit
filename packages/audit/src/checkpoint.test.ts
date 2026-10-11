@@ -8,9 +8,11 @@ import {
   type Checkpoint,
   type CheckpointSigner,
   type SigningKey,
+  createRemoteSealer,
   proveConsistency,
   proveInclusion,
   retireSigningKey,
+  seal,
   sealCheckpoint,
   verifyCheckpoint,
   verifyConsistency,
@@ -209,6 +211,197 @@ describe('sealCheckpoint', () => {
     await insertLeaves(t.exec, 1, 2);
     const c = await sealCheckpoint(t.db, { ledger: 'app', signer: newSigner() });
     expect(c).not.toBeNull();
+  });
+});
+
+/** A fake sealing address: the private key lives only in its closure, never in a variable the test's own code holds. */
+function fakeSealingAddress(options: { fail?: boolean; badSignature?: boolean } = {}) {
+  const { publicKey, privateKey } = generateKeyPairSync('ed25519');
+  const spki = publicKey.export({ format: 'der', type: 'spki' });
+  const requests: { url: string; authorization: string | null; body: Record<string, unknown> }[] =
+    [];
+  const fetchImpl = (async (url: unknown, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    requests.push({
+      url: String(url),
+      authorization: (init?.headers as Record<string, string> | undefined)?.authorization ?? null,
+      body,
+    });
+    if (options.fail) return new Response('nope', { status: 502 });
+    const message = Buffer.from(String(body.hash), 'hex');
+    const signature = options.badSignature
+      ? new Uint8Array(64)
+      : new Uint8Array(sign(null, message, privateKey));
+    return new Response(signature);
+  }) as typeof fetch;
+  return {
+    publicKey: spki.subarray(spki.length - 32).toString('hex'),
+    fetch: fetchImpl,
+    requests,
+  };
+}
+
+describe('createRemoteSealer', () => {
+  it('seals through the sealing address, and the app never touches a private key', async () => {
+    const address = fakeSealingAddress();
+    const sealer = createRemoteSealer({
+      url: 'https://sealer.test/sign',
+      ledger: 'app',
+      credential: 'secret-credential',
+      publicKey: address.publicKey,
+      fetch: address.fetch,
+    });
+    await insertLeaves(t.exec, 1, 3);
+    const c = (await sealCheckpoint(t.db, { ledger: 'app', signer: sealer })) as Checkpoint;
+    expect(await verifyCheckpoint(c, await keysOf())).toBe(true);
+    expect(address.requests).toHaveLength(1);
+    expect(address.requests[0]).toMatchObject({
+      url: 'https://sealer.test/sign',
+      authorization: 'Bearer secret-credential',
+      body: { ledger: 'app', hash: c.checkpoint_hash },
+    });
+    // Nothing in this test, or in createRemoteSealer, ever held `privateKey` --
+    // it lives only inside fakeSealingAddress's closure.
+  });
+
+  it('throws, and seals nothing, when the sealing address refuses the request', async () => {
+    const address = fakeSealingAddress({ fail: true });
+    const sealer = createRemoteSealer({
+      url: 'https://sealer.test/sign',
+      ledger: 'app',
+      credential: 'secret',
+      publicKey: address.publicKey,
+      fetch: address.fetch,
+    });
+    await insertLeaves(t.exec, 1, 2);
+    await expect(sealCheckpoint(t.db, { ledger: 'app', signer: sealer })).rejects.toThrow(
+      'the sealing address refused',
+    );
+    expect(await count('audit_checkpoints')).toBe(0);
+  });
+
+  it('throws on a malformed signature', async () => {
+    const address = fakeSealingAddress({ badSignature: true });
+    const sealer = createRemoteSealer({
+      url: 'https://sealer.test/sign',
+      ledger: 'app',
+      credential: 'secret',
+      publicKey: address.publicKey,
+      fetch: address.fetch,
+    });
+    await insertLeaves(t.exec, 1, 2);
+    // A 64-byte all-zero signature parses but does not verify: sealCheckpoint's own check catches it.
+    await expect(sealCheckpoint(t.db, { ledger: 'app', signer: sealer })).rejects.toThrow(
+      'does not verify',
+    );
+  });
+
+  it('throws when the sealing address cannot be reached', async () => {
+    const unreachable = (async () => {
+      throw new Error('connection refused');
+    }) as typeof fetch;
+    const sealer = createRemoteSealer({
+      url: 'https://sealer.test/sign',
+      ledger: 'app',
+      credential: 'secret',
+      publicKey: newSigner().publicKey,
+      fetch: unreachable,
+    });
+    await insertLeaves(t.exec, 1, 1);
+    await expect(sealCheckpoint(t.db, { ledger: 'app', signer: sealer })).rejects.toThrow(
+      'could not be reached',
+    );
+  });
+
+  it('refuses a malformed public key before any request', () => {
+    expect(() =>
+      createRemoteSealer({
+        url: 'https://sealer.test/sign',
+        ledger: 'app',
+        credential: 'secret',
+        publicKey: 'not-hex',
+      }),
+    ).toThrow('64 lower-case');
+  });
+});
+
+describe('seal', () => {
+  it('seals through a remote sealer exactly as sealCheckpoint would', async () => {
+    const address = fakeSealingAddress();
+    const sealer = createRemoteSealer({
+      url: 'https://sealer.test/sign',
+      ledger: 'app',
+      credential: 'secret',
+      publicKey: address.publicKey,
+      fetch: address.fetch,
+    });
+    await insertLeaves(t.exec, 1, 3);
+    const c = await seal(t.db, { ledger: 'app', sealer });
+    expect(c).not.toBeNull();
+    expect(await verifyCheckpoint(c as Checkpoint, await keysOf())).toBe(true);
+  });
+
+  it('refuses before calling the sealer when the already-sealed rows no longer hash to the last checkpoint', async () => {
+    const address = fakeSealingAddress();
+    const sealer = createRemoteSealer({
+      url: 'https://sealer.test/sign',
+      ledger: 'app',
+      credential: 'secret',
+      publicKey: address.publicKey,
+      fetch: address.fetch,
+    });
+    await insertLeaves(t.exec, 1, 3);
+    await seal(t.db, { ledger: 'app', sealer });
+    expect(address.requests).toHaveLength(1);
+    // Rewritten from scratch: same seq range, different leaves underneath the checkpoint already sealed.
+    await t.exec('alter table audit_events disable trigger all');
+    await t.exec('delete from audit_events');
+    await t.exec('alter table audit_events enable trigger all');
+    for (let seq = 1; seq <= 3; seq++) {
+      await t.exec(`
+        insert into audit_events
+          (actor_class, actor_id, actor_display, action, target_type, target_id, outcome, context,
+           tenant_visible, chain_version, seq, received_at, row_hash)
+        values ('human', 'u', 'U', 'a.b', 't', 'x', 'success', 'standard', false, 2, ${seq}, now(), '${rowHashOf(seq + 999)}')
+      `);
+    }
+    await expect(seal(t.db, { ledger: 'app', sealer })).rejects.toThrow(
+      'does not extend the sealed one',
+    );
+    // The client refused before it ever asked the sealing address again.
+    expect(address.requests).toHaveLength(1);
+    expect(await count('audit_checkpoints')).toBe(1);
+  });
+
+  it('refuses a different ledger name before calling the sealer', async () => {
+    const address = fakeSealingAddress();
+    const sealer = createRemoteSealer({
+      url: 'https://sealer.test/sign',
+      ledger: 'app',
+      credential: 'secret',
+      publicKey: address.publicKey,
+      fetch: address.fetch,
+    });
+    await insertLeaves(t.exec, 1, 1);
+    await seal(t.db, { ledger: 'app', sealer });
+    await insertLeaves(t.exec, 2, 2);
+    await expect(seal(t.db, { ledger: 'other', sealer })).rejects.toThrow(
+      'ledger name differs from the previous checkpoint',
+    );
+    expect(address.requests).toHaveLength(1);
+  });
+
+  it('returns null and calls the sealer not at all when there is no new row', async () => {
+    const address = fakeSealingAddress();
+    const sealer = createRemoteSealer({
+      url: 'https://sealer.test/sign',
+      ledger: 'app',
+      credential: 'secret',
+      publicKey: address.publicKey,
+      fetch: address.fetch,
+    });
+    expect(await seal(t.db, { ledger: 'app', sealer })).toBeNull();
+    expect(address.requests).toHaveLength(0);
   });
 });
 

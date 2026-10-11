@@ -18,13 +18,16 @@ export type {
   CheckpointSigner,
   ConsistencyProof,
   InclusionProof,
+  RemoteSealerOptions,
   SigningKey,
 } from './checkpoint.js';
 export {
+  createRemoteSealer,
   listCheckpoints,
   proveConsistency,
   proveInclusion,
   retireSigningKey,
+  seal,
   sealCheckpoint,
   verifyCheckpoint,
   verifyConsistency,
@@ -34,6 +37,8 @@ export * from './anchor-tables.js';
 export * from './checkpoint-tables.js';
 export type { TableVerifyResult, VerifyTableOptions } from './verify-table.js';
 export { verifyTable } from './verify-table.js';
+export type { VerifyLedgerOptions, VerifyLedgerResult } from './verify-ledger.js';
+export { verifyLedger } from './verify-ledger.js';
 export { auditPolicyModule, catalogue, type Permission } from './catalogue.js';
 export * from './ledger.js';
 export { assertRuntimeRole, UnsafeRuntimeRoleError } from './runtime-role-guard.js';
