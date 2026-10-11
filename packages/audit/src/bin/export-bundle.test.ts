@@ -55,6 +55,12 @@ describe.skipIf(!existsSync(bin))('audit-export-bundle arguments', () => {
     expect(reversed.stderr).toContain('--from is after --to');
   });
 
+  it('exits 2 on an --environment that is neither stage nor production', () => {
+    const result = run(...ok, '--environment', 'nope');
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain('--environment must be "stage" or "production"');
+  });
+
   it('exits 2 when --out already holds a file, and leaves it alone', () => {
     const out = mkdtempSync(join(scratch, 'full-'));
     writeFileSync(join(out, 'keep.txt'), 'x');
@@ -134,6 +140,41 @@ describe.skipIf(!url || !existsSync(bin) || !existsSync(verifier))('audit-export
     const manifest = JSON.parse(readFileSync(join(out, 'manifest.json'), 'utf8'));
     expect(manifest.range).toEqual({ from: 4, to: 5 });
     expect(verify(out).status).toBe(0);
+  });
+
+  it('labels the manifest production by default, stage with --environment, and APP_ENVIRONMENT as a fallback', () => {
+    const def = join(scratch, 'env-default');
+    expect(exp('--ledger', 'app', '--out', def).status).toBe(0);
+    expect(JSON.parse(readFileSync(join(def, 'manifest.json'), 'utf8')).environment).toBe(
+      'production',
+    );
+
+    const flagged = join(scratch, 'env-flag');
+    expect(exp('--ledger', 'app', '--out', flagged, '--environment', 'stage').status).toBe(0);
+    expect(JSON.parse(readFileSync(join(flagged, 'manifest.json'), 'utf8')).environment).toBe(
+      'stage',
+    );
+
+    const fromEnv = join(scratch, 'env-var');
+    const result = spawnSync(
+      'node',
+      [
+        bin,
+        '--database-url',
+        url ?? '',
+        '--schema',
+        t.schema ?? '',
+        '--ledger',
+        'app',
+        '--out',
+        fromEnv,
+      ],
+      { encoding: 'utf8', env: { ...process.env, APP_ENVIRONMENT: 'stage' } },
+    );
+    expect(result.status).toBe(0);
+    expect(JSON.parse(readFileSync(join(fromEnv, 'manifest.json'), 'utf8')).environment).toBe(
+      'stage',
+    );
   });
 
   it('exits 1 and writes nothing when the bundle cannot be made', () => {

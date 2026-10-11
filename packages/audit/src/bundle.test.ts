@@ -111,6 +111,22 @@ describe('buildBundle refuses', () => {
   });
 });
 
+describe('buildBundle labels the environment it was exported from', () => {
+  it('defaults to production when none is given', async () => {
+    await sign(1);
+    await seal();
+    const bundle = await buildBundle(t.db, { ledger: 'app' });
+    expect(JSON.parse(bundle['manifest.json'] ?? '').environment).toBe('production');
+  });
+
+  it('carries environment: stage when the export was made in stage', async () => {
+    await sign(1);
+    await seal();
+    const bundle = await buildBundle(t.db, { ledger: 'app', environment: 'stage' });
+    expect(JSON.parse(bundle['manifest.json'] ?? '').environment).toBe('stage');
+  });
+});
+
 describe('buildBundle reads in pages', () => {
   it('returns every row of a range longer than one page, in seq order, one line each', async () => {
     await t.exec(`

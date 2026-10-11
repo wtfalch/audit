@@ -24,15 +24,24 @@ import { BundleRefusal, buildBundle } from '../bundle.js';
  * verify-chain.ts that imports it.
  */
 const USAGE =
-  'usage: audit-export-bundle --database-url <url> [--schema <name>] --ledger <name> --out <dir> [--from <seq>] [--to <seq>]\n' +
+  'usage: audit-export-bundle --database-url <url> [--schema <name>] --ledger <name> --out <dir> [--from <seq>] [--to <seq>] [--environment <stage|production>]\n' +
   '  --database-url  Postgres url (or set DATABASE_URL); an owner/admin role\n' +
   "  --schema        the schema audit_events lives in (default: the connection's own search_path)\n" +
   '  --ledger        the ledger name given to sealCheckpoint\n' +
   '  --out           the directory to write the bundle into; new or empty\n' +
   '  --from          first seq: 1 (default) or one more than a checkpoint size\n' +
-  '  --to            last seq: a checkpoint size (default the newest checkpoint)';
+  '  --to            last seq: a checkpoint size (default the newest checkpoint)\n' +
+  '  --environment   stage or production (default: $APP_ENVIRONMENT, else production)';
 
-const FLAGS = ['--database-url', '--schema', '--ledger', '--out', '--from', '--to'];
+const FLAGS = [
+  '--database-url',
+  '--schema',
+  '--ledger',
+  '--out',
+  '--from',
+  '--to',
+  '--environment',
+];
 
 function seqOf(flag: string, raw: string | undefined): number | undefined {
   if (raw === undefined) return undefined;
@@ -40,6 +49,12 @@ function seqOf(flag: string, raw: string | undefined): number | undefined {
   if (!/^[0-9]+$/.test(raw) || !Number.isSafeInteger(n) || n < 1)
     throw new Error(`${flag} is not a positive integer`);
   return n;
+}
+
+function environmentOf(raw: string | undefined): 'stage' | 'production' {
+  const value = raw ?? process.env.APP_ENVIRONMENT ?? 'production';
+  if (value === 'stage' || value === 'production') return value;
+  throw new Error('--environment must be "stage" or "production"');
 }
 
 function parse(argv: readonly string[]) {
@@ -63,7 +78,8 @@ function parse(argv: readonly string[]) {
   const from = seqOf('--from', values['--from']);
   const to = seqOf('--to', values['--to']);
   if (from !== undefined && to !== undefined && from > to) throw new Error('--from is after --to');
-  return { url, schema, ledger, out, from, to };
+  const environment = environmentOf(values['--environment']);
+  return { url, schema, ledger, out, from, to, environment };
 }
 
 /** Throws unless `dir` is missing or holds nothing. */
@@ -104,6 +120,7 @@ async function main(): Promise<number> {
       ledger: args.ledger,
       from: args.from,
       to: args.to,
+      environment: args.environment,
     });
   } catch (error) {
     if (error instanceof BundleRefusal) {

@@ -40,6 +40,64 @@ export interface CheckpointSigner {
   sign(message: Uint8Array<ArrayBuffer>): Promise<Uint8Array>;
 }
 
+export interface RemoteSealerOptions {
+  /** The sealing address: an HTTP(S) endpoint that holds the signing key and this ledger's owner never does. */
+  readonly url: string;
+  /** This ledger's name, sent with every request so the sealing address's own log can name what it signed. */
+  readonly ledger: string;
+  /** This app's own credential, sent as `Authorization: Bearer <credential>`; it authenticates the app to the sealing address, never the other way round. */
+  readonly credential: string;
+  /** The raw 32-byte Ed25519 public key the sealing address signs with, 64 lower-case hex characters. */
+  readonly publicKey: string;
+  /** Defaults to the global `fetch`. */
+  readonly fetch?: typeof fetch;
+  /** The whole request, connection to last byte. Default 10000. */
+  readonly timeoutMs?: number;
+}
+
+/**
+ * A `CheckpointSigner` whose private key lives entirely on the other side of
+ * an HTTP call: this ledger's own process never reads it, never holds it in
+ * memory, and never has it in an environment variable or a file. Plug the
+ * result straight into `sealCheckpoint` (or `seal`, below).
+ *
+ * Every request carries `ledger` and the hash being signed, so the sealing
+ * address's own access log says which ledger's head it sealed and when,
+ * without that address ever reading this ledger's rows. A non-OK response,
+ * a malformed signature, a network failure or the timeout elapsing all
+ * throw -- a failed seal is always an error the host sees, never a silent
+ * no-op.
+ */
+export function createRemoteSealer(options: RemoteSealerOptions): CheckpointSigner {
+  const { url, ledger, credential, publicKey, timeoutMs = 10_000 } = options;
+  const doFetch = options.fetch ?? globalThis.fetch;
+  if (!/^[0-9a-f]{64}$/.test(publicKey)) {
+    throw new Error('audit: createRemoteSealer: publicKey must be 64 lower-case hex characters');
+  }
+  return {
+    publicKey,
+    async sign(message) {
+      let response: Response;
+      try {
+        response = await doFetch(url, {
+          method: 'POST',
+          headers: { authorization: `Bearer ${credential}`, 'content-type': 'application/json' },
+          body: JSON.stringify({ ledger, hash: toHex(message) }),
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+      } catch (_error) {
+        throw new Error('audit: the sealing address could not be reached');
+      }
+      if (!response.ok) throw new Error('audit: the sealing address refused the request');
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      if (bytes.length !== 64) {
+        throw new Error('audit: the sealing address returned a malformed signature');
+      }
+      return bytes;
+    },
+  };
+}
+
 export interface Checkpoint {
   v: 1;
   ledger: string;
@@ -141,9 +199,25 @@ function toCheckpoint(row: AuditCheckpointRow): Checkpoint {
  */
 export async function sealCheckpoint(
   handle: Handle,
-  options: { ledger: string; signer: CheckpointSigner },
+  options: {
+    ledger: string;
+    signer: CheckpointSigner;
+    /**
+     * A stage database is an exact copy of production, audit chain
+     * included, so it must never sign a checkpoint with production's
+     * signer. Defaults to `'production'` for a host that predates this
+     * option. In stage this throws before the signer is called, before any
+     * row is read, and before anything is written.
+     */
+    environment?: 'stage' | 'production';
+  },
 ): Promise<Checkpoint | null> {
-  const { ledger, signer } = options;
+  const { ledger, signer, environment = 'production' } = options;
+  if (environment === 'stage') {
+    throw new Error(
+      'audit: sealCheckpoint refuses in a stage environment: stage must not sign checkpoints as production',
+    );
+  }
   if (ledger.length < 1 || ledger.length > 256)
     throw new Error('ledger name must be 1 to 256 characters');
   if (!isHash(signer.publicKey) || !/^[0-9a-f]{64}$/.test(signer.publicKey))
@@ -205,6 +279,46 @@ export async function sealCheckpoint(
       frontier,
     });
     return { v: 1, ...body, checkpoint_hash: hash, signature, public_key: signer.publicKey };
+  });
+}
+
+/**
+ * The task a host runs on a schedule to seal with a sealer that holds no
+ * private key of its own (`createRemoteSealer`, above, or any other
+ * `CheckpointSigner`). Before asking the signer for anything, it re-reads
+ * the rows the ledger's last checkpoint covers and recomputes their root
+ * (`proveInclusion`): if that no longer matches what was sealed -- the
+ * ledger was rewritten from scratch, or edited before the last seal -- this
+ * throws and the signer is never called, so a rewritten ledger can never be
+ * resealed as if it legitimately extended the one before it. `sealCheckpoint`
+ * itself already returns `null`, with no call to the signer, when there is
+ * no new row to seal.
+ */
+export async function seal(
+  handle: Handle,
+  options: { ledger: string; sealer: CheckpointSigner; environment?: 'stage' | 'production' },
+): Promise<Checkpoint | null> {
+  const [last] = await handle
+    .select()
+    .from(auditCheckpoints)
+    .orderBy(desc(auditCheckpoints.treeSize))
+    .limit(1);
+  if (last) {
+    if (last.ledger !== options.ledger) {
+      throw new Error('audit: seal: ledger name differs from the previous checkpoint');
+    }
+    try {
+      await proveInclusion(handle, last.treeSize);
+    } catch (_error) {
+      throw new Error(
+        'audit: seal refuses: the rows this ledger last sealed no longer hash to that checkpoint; its head does not extend the sealed one',
+      );
+    }
+  }
+  return sealCheckpoint(handle, {
+    ledger: options.ledger,
+    signer: options.sealer,
+    environment: options.environment,
   });
 }
 

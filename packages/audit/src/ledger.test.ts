@@ -732,6 +732,36 @@ describe('hash chain (createLedger({ hashChain: true }))', () => {
     expect(await verifyChain(rows)).toEqual({ ok: true });
   });
 
+  it('a chain copied from production and extended in stage still verifies (sign() carries no environment)', async () => {
+    // "Copied from production" is a database copy: the rows a stage
+    // database inherits are exactly these, the same table, no different
+    // flag. Extending it is the same sign() call a production host makes;
+    // only sealCheckpoint/anchorCheckpoints refuse in stage, never sign().
+    for (let i = 0; i < 2; i++) {
+      await chainedLedger.sign(t.db, {
+        action: 'invoice.paid',
+        tenantId: TENANT_A,
+        actor: ada,
+        context: 'standard',
+        target: { type: 'invoice', id: `prod_${i}` },
+      });
+    }
+    const copiedFromProduction = await chainedLedger.exportRows(t.db, TENANT_A);
+    for (let i = 0; i < 2; i++) {
+      await chainedLedger.sign(t.db, {
+        action: 'invoice.paid',
+        tenantId: TENANT_A,
+        actor: ada,
+        context: 'standard',
+        target: { type: 'invoice', id: `stage_${i}` },
+      });
+    }
+    const extendedInStage = await chainedLedger.exportRows(t.db, TENANT_A);
+    expect(extendedInStage).toHaveLength(4);
+    expect(extendedInStage.slice(0, 2)).toEqual(copiedFromProduction);
+    expect(await verifyChain(extendedInStage)).toEqual({ ok: true });
+  });
+
   it('chains onto the tail correctly under concurrent sign() calls', async () => {
     await Promise.all(
       Array.from({ length: 5 }, (_, i) =>
