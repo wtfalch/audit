@@ -462,6 +462,28 @@ The database also keeps the public key in `audit_signing_keys`, as a
 convenience. A verifier never trusts those rows; it trusts the keys you hand
 it.
 
+### Stage must never seal or anchor as production
+
+A stage database is an exact copy of production, audit chain included:
+`sign()` carries no flag and keeps extending that chain unchanged, which is
+why a stage-extended chain still verifies. But `sealCheckpoint` and
+`anchorCheckpoints` both take `environment: 'stage' | 'production'`
+(default `'production'`, so an existing caller is unaffected) and refuse
+before calling the signer, the timestamp authority, or touching the
+database at all when it is `'stage'`: a stage process must never sign a
+checkpoint with production's signer, or anchor one outside as if it were
+production's.
+
+```ts
+const environment = process.env.APP_ENVIRONMENT === 'stage' ? 'stage' : 'production';
+await sealCheckpoint(adminDb, { ledger: 'orders', signer, environment });
+await anchorCheckpoints(adminDb, { tsaUrl, provider, environment });
+```
+
+`buildBundle` (and `audit-export-bundle`, below) takes the same option and
+writes it into the manifest as `environment`, so an export made in stage is
+always labelled `stage`, never silently read as a production bundle.
+
 ### Retiring a key
 
 `retireSigningKey(handle, publicKey)` stamps the key retired with the
@@ -526,10 +548,13 @@ DATABASE_URL="$ADMIN_DATABASE_URL" pnpm exec audit-export-bundle \
 `--out` must be a new or empty directory. `--from` and `--to` pick a range of
 `seq` values: `to` is a checkpoint's size, and `from` is 1 or one more than a
 checkpoint's size. Without them the bundle runs from row 1 to the newest
-checkpoint. It exits 0 when written, 1 when it refuses (no checkpoint, a range
-off the checkpoint boundaries, a ledger name that is not the checkpoints', or
-a row erased but not yet sealed: run `ledger.erase()` again, which seals it),
-and 2 when it could not run (bad arguments, no connection, `--out` not empty
+checkpoint. `--environment stage|production` labels the manifest
+`environment` field; without it the command reads `APP_ENVIRONMENT` (what
+foundry sets on every entry), and without that it is `production`. It exits
+0 when written, 1 when it refuses (no checkpoint, a range off the
+checkpoint boundaries, a ledger name that is not the checkpoints', or a row
+erased but not yet sealed: run `ledger.erase()` again, which seals it), and
+2 when it could not run (bad arguments, no connection, `--out` not empty
 or not writable). It reads every row, so connect as the table's owner or an
 admin, as for `audit-verify-chain`. It builds the whole bundle in memory before
 it writes a file; if a write fails it removes the files it wrote and exits 2,

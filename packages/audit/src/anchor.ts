@@ -38,6 +38,14 @@ export interface AnchorOptions {
   readonly fetch?: typeof fetch;
   /** The whole request, connection to last byte. Default 10000. */
   readonly timeoutMs?: number;
+  /**
+   * A stage database is an exact copy of production, audit chain included,
+   * so it must never anchor a checkpoint outside as if it were production's.
+   * Defaults to `'production'` for a host that predates this option. In
+   * stage this throws before any row is read and before the authority is
+   * ever called.
+   */
+  readonly environment?: 'stage' | 'production';
 }
 
 const hex = (bytes: Uint8Array): string =>
@@ -177,6 +185,11 @@ async function requestAnchor(
  * against roots the auditor chooses.
  */
 export async function anchorCheckpoints(handle: Handle, options: AnchorOptions): Promise<number> {
+  if ((options.environment ?? 'production') === 'stage') {
+    throw new Error(
+      'audit: anchorCheckpoints refuses in a stage environment: stage must not anchor checkpoints outside',
+    );
+  }
   const pending = resultRows<{ checkpoint_hash: string }>(
     await handle.execute(sql`
       select c.checkpoint_hash from audit_checkpoints c

@@ -141,9 +141,25 @@ function toCheckpoint(row: AuditCheckpointRow): Checkpoint {
  */
 export async function sealCheckpoint(
   handle: Handle,
-  options: { ledger: string; signer: CheckpointSigner },
+  options: {
+    ledger: string;
+    signer: CheckpointSigner;
+    /**
+     * A stage database is an exact copy of production, audit chain
+     * included, so it must never sign a checkpoint with production's
+     * signer. Defaults to `'production'` for a host that predates this
+     * option. In stage this throws before the signer is called, before any
+     * row is read, and before anything is written.
+     */
+    environment?: 'stage' | 'production';
+  },
 ): Promise<Checkpoint | null> {
-  const { ledger, signer } = options;
+  const { ledger, signer, environment = 'production' } = options;
+  if (environment === 'stage') {
+    throw new Error(
+      'audit: sealCheckpoint refuses in a stage environment: stage must not sign checkpoints as production',
+    );
+  }
   if (ledger.length < 1 || ledger.length > 256)
     throw new Error('ledger name must be 1 to 256 characters');
   if (!isHash(signer.publicKey) || !/^[0-9a-f]{64}$/.test(signer.publicKey))

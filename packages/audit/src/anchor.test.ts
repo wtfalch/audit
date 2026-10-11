@@ -313,6 +313,19 @@ describe('anchorCheckpoints', () => {
     const error = await anchorCheckpoints(t.db, { ...options(), fetch: leaking }).catch((e) => e);
     expect(String(error.message)).not.toContain('secret');
   });
+
+  it('refuses in a stage environment and never calls the timestamp authority', async () => {
+    let called = false;
+    const watched = (async (...args: Parameters<typeof fetch>) => {
+      called = true;
+      return tsa.fetch(...args);
+    }) as typeof fetch;
+    await expect(
+      anchorCheckpoints(t.db, { ...options(), fetch: watched, environment: 'stage' }),
+    ).rejects.toThrow('refuses in a stage environment');
+    expect(called).toBe(false);
+    expect(await anchorRows()).toEqual([]);
+  });
 });
 
 describe('audit_anchors', () => {

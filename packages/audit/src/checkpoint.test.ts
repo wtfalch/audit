@@ -186,6 +186,30 @@ describe('sealCheckpoint', () => {
     const signer = { ...newSigner(), publicKey: 'AB'.repeat(32) };
     await expect(sealCheckpoint(t.db, { ledger: 'app', signer })).rejects.toThrow('64 lower-case');
   });
+
+  it('refuses in a stage environment and never calls the signer', async () => {
+    await insertLeaves(t.exec, 1, 2);
+    let called = false;
+    const signer: CheckpointSigner = {
+      ...newSigner(),
+      async sign(message) {
+        called = true;
+        return newSigner().sign(message);
+      },
+    };
+    await expect(
+      sealCheckpoint(t.db, { ledger: 'app', signer, environment: 'stage' }),
+    ).rejects.toThrow('refuses in a stage environment');
+    expect(called).toBe(false);
+    expect(await count('audit_checkpoints')).toBe(0);
+    expect(await count('audit_signing_keys')).toBe(0);
+  });
+
+  it('seals in production when no environment is given, same as before', async () => {
+    await insertLeaves(t.exec, 1, 2);
+    const c = await sealCheckpoint(t.db, { ledger: 'app', signer: newSigner() });
+    expect(c).not.toBeNull();
+  });
 });
 
 describe('verifyCheckpoint', () => {

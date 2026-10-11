@@ -36,6 +36,13 @@ export interface BuildBundleOptions {
   readonly from?: number;
   /** Last `seq`: a checkpoint's `tree_size`. Default the newest checkpoint's. */
   readonly to?: number;
+  /**
+   * Labels the bundle with where it was exported from. Defaults to
+   * `'production'`. A stage database is a copy of production, so an
+   * auditor must be able to tell a stage export from a production one at a
+   * glance.
+   */
+  readonly environment?: 'stage' | 'production';
 }
 
 const iso = (date: Date): string => date.toISOString();
@@ -178,6 +185,7 @@ export async function buildBundle(
     format: BUNDLE_FORMAT,
     generated_at: iso(new Date()),
     ledger: options.ledger,
+    environment: options.environment ?? 'production',
     range: { from, to },
     event_count: lines.length,
     signing_keys: keys.map((k) => ({
