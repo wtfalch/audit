@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.14.0
+
+- **Cloudflare Workers.** The main entry is tested on workerd without
+  `nodejs_compat`: `sign()` with `hashChain` runs there against a fake handle.
+  A test fails if the main entry's import graph ever reaches a `node:` module.
+  `sign()` with `hashChain` is tested over `drizzle-orm/postgres-js` with a
+  fresh client per request on a real Postgres: sequential and concurrent
+  signs keep one gap-free chain, and a failed insert leaves no row.
+- **`migrations` from `@wtfalch/audit/migration-list`** and the
+  `audit-migrations-json [file]` command: the ordered `[{ id, sql }]` list of
+  this package's migrations, ids stable (`audit-0001_audit`), for an app's
+  release asset `migrations.json`. `pnpm gen:migrations` rewrites
+  `src/migration-list.ts` after a new migration; a test fails on drift.
+- README: a "Cloudflare Workers" section.
+- Known gap: `anchorCheckpoints` and the `read` cursor use `Buffer`, so a Worker
+  that calls them needs `nodejs_compat`. `sign()` does not.
+
 ## 0.13.0 — unreleased
 
 0.12.0 is skipped: another open change claims that number.

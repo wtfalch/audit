@@ -1,0 +1,114 @@
+import { drizzle } from 'drizzle-orm/postgres-js';
+import postgres from 'postgres';
+import { afterEach, describe, expect, it } from 'vitest';
+import { type Handle, createLedger } from './ledger.js';
+import { tables } from './tables.js';
+import { CORE, type RuntimeRoleDb, urlFor, withRuntimeRole } from './test/db.js';
+import { verifyTable } from './verify-table.js';
+import { ledgerVocabularyFromCore } from './vocabulary.js';
+
+/**
+ * The Cloudflare Worker path, on a real Postgres only: `sign()` with
+ * `hashChain` through `drizzle-orm/postgres-js`, the driver Cloudflare
+ * documents for Hyperdrive, with a fresh client per request as the runtime
+ * role (no UPDATE, DELETE or TRUNCATE), the way a Worker connects.
+ */
+const url = process.env.TEST_DATABASE_URL;
+
+const ledger = createLedger({ vocabulary: ledgerVocabularyFromCore(CORE), hashChain: true });
+const ada = { class: 'human', id: 'user_ada', display: 'Ada' };
+const event = (targetId: string, tenantId: string | null = null) =>
+  ({
+    action: tenantId === null ? 'operator.bootstrapped' : 'membership.created',
+    tenantId,
+    actor: ada,
+    context: tenantId === null ? 'operator' : 'standard',
+    target: { type: 'membership', id: targetId },
+  }) as const;
+
+let t: RuntimeRoleDb | undefined;
+afterEach(async () => {
+  await t?.close();
+  t = undefined;
+});
+
+/** One request: a new client, one connection, the runtime role, closed after. */
+async function request<T>(db: RuntimeRoleDb, run: (handle: Handle) => Promise<T>): Promise<T> {
+  if (!url) throw new Error('TEST_DATABASE_URL is required');
+  const client = postgres(urlFor(url, db.role, 'rt'), {
+    max: 1,
+    prepare: false,
+    connection: { search_path: `${db.schema},public` },
+  });
+  try {
+    return await run(drizzle(client, { schema: tables }) as unknown as Handle);
+  } finally {
+    await client.end({ timeout: 5 });
+  }
+}
+
+const rows = (db: RuntimeRoleDb) =>
+  db.owner.database.query<{ seq: string; prev_hash: string | null; row_hash: string }>(
+    'select seq, prev_hash, row_hash from audit_events order by seq',
+  );
+
+describe.skipIf(!url)('sign over drizzle-orm/postgres-js, a fresh client per request', () => {
+  it('chains sequential requests: gap-free seq, each row linked to the last, the table verifies', async () => {
+    if (!url) return;
+    t = await withRuntimeRole(url);
+    for (const id of ['m1', 'm2', 'm3']) await request(t, (h) => ledger.sign(h, event(id)));
+    const stored = await rows(t);
+    expect(stored.map((r) => Number(r.seq))).toEqual([1, 2, 3]);
+    expect(stored[0]?.prev_hash).toBeNull();
+    expect(stored[1]?.prev_hash).toBe(stored[0]?.row_hash);
+    expect(stored[2]?.prev_hash).toBe(stored[1]?.row_hash);
+    expect(await request(t, (h) => verifyTable(h))).toMatchObject({ ok: true, rows: 3 });
+  });
+
+  it('keeps one chain when signs run at once on separate clients', async () => {
+    if (!url) return;
+    const db = await withRuntimeRole(url);
+    t = db;
+    const ids = Array.from({ length: 8 }, (_, i) => `c${i}`);
+    await Promise.all(ids.map((id) => request(db, (h) => ledger.sign(h, event(id)))));
+    const stored = await rows(db);
+    expect(stored.map((r) => Number(r.seq))).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    for (let i = 1; i < stored.length; i += 1) {
+      expect(stored[i]?.prev_hash).toBe(stored[i - 1]?.row_hash);
+    }
+    expect(await request(db, (h) => verifyTable(h))).toMatchObject({ ok: true, rows: 8 });
+  });
+
+  it('leaves no row when the insert fails, and the next row takes the same seq', async () => {
+    if (!url) return;
+    t = await withRuntimeRole(url);
+    await request(t, (h) => ledger.sign(h, event('ok1')));
+    // tenant_id is a uuid column: the insert fails after the lock and the tail read.
+    await expect(request(t, (h) => ledger.sign(h, event('bad', 'not-a-uuid')))).rejects.toThrow();
+    expect((await rows(t)).map((r) => Number(r.seq))).toEqual([1]);
+    await request(t, (h) => ledger.sign(h, event('ok2')));
+    const stored = await rows(t);
+    expect(stored.map((r) => Number(r.seq))).toEqual([1, 2]);
+    expect(stored[1]?.prev_hash).toBe(stored[0]?.row_hash);
+    expect(await request(t, (h) => verifyTable(h))).toMatchObject({ ok: true, rows: 2 });
+  });
+
+  it('refuses a connection that can update the ledger, before writing a row', async () => {
+    if (!url) return;
+    t = await withRuntimeRole(url, { appendOnly: [] });
+    const db = t;
+    const client = postgres(urlFor(url, db.role, 'rt'), {
+      max: 1,
+      prepare: false,
+      connection: { search_path: `${db.schema},public` },
+    });
+    try {
+      await expect(
+        ledger.sign(drizzle(client, { schema: tables }) as unknown as Handle, event('x')),
+      ).rejects.toThrow(/not append-only|still has/);
+    } finally {
+      await client.end({ timeout: 5 });
+    }
+    expect(await rows(db)).toEqual([]);
+  });
+});

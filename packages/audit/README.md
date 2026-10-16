@@ -707,6 +707,47 @@ The push half (a webhook, a syslog socket, a file a shipper tails) is the
 host's: which transport, whose endpoint, whose credentials and whose retry
 policy are one decision per enterprise customer, not the package's.
 
+## Cloudflare Workers
+
+The main entry (`@wtfalch/audit`) imports no Node module, and `sign()` uses
+`globalThis.crypto.subtle`, so a Worker signs without `nodejs_compat`. The
+built entry is tested on workerd (`pnpm test:workerd`). The Node-only parts are
+the `audit-*` commands and the `@wtfalch/audit/migrations-dir` subpath; a Worker
+imports neither. `anchorCheckpoints` and the cursor in `read` use `Buffer`; a
+Worker that calls them turns `nodejs_compat` on.
+
+- **Driver.** `drizzle-orm/postgres-js` over Hyperdrive, the driver Cloudflare
+  documents. `sign()` is tested with it against a real Postgres.
+- **A fresh client per request.** Build the `postgres` client and the Drizzle
+  handle inside the request, with `max: 1` and `prepare: false`, and end the
+  client when the request is done (`ctx.waitUntil(client.end())`). Never keep
+  one in module scope: a Worker isolate does not hold a connection across
+  requests. `sign()` checks the runtime role once per handle, so each request
+  runs that one query; a host that already ran `assertRuntimeRole` at deploy
+  can pass `checkRuntimeRole: false`.
+- **`hashChain: true`.** `sign()` opens a transaction, takes
+  `pg_advisory_xact_lock`, reads `audit_chain_tail_v2()` and inserts. Two
+  Workers signing at once queue on the lock, and the chain stays gap-free. A
+  failed insert rolls back and leaves no row. Await `sign()` before the tool
+  runs, so a call is recorded before it acts.
+- **Runtime role.** The role the Worker connects as has UPDATE, DELETE and
+  TRUNCATE revoked on every ledger table:
+  `appendOnly: ['audit_events', 'audit_checkpoints', 'audit_signing_keys', 'audit_anchors']`,
+  plus the `grants` list under "Install". Connect with the runtime
+  credential, never the owner's.
+- **`migrations.json`.** A Worker has no filesystem, so the migrations ship as
+  data. `migrations` from `@wtfalch/audit/migration-list` is the ordered
+  `[{ id, sql }]` list (`id` is `audit-` and the file name, such as
+  `audit-0001_audit`; ids do not change between releases). An app's build puts
+  it in the release asset `migrations.json`, which the platform applies with
+  the owner role:
+
+  ```sh
+  pnpm exec audit-migrations-json dist/migrations.json
+  ```
+
+  An app with its own migrations concatenates its list after this one.
+
 ## Tests
 
 ```sh
@@ -716,7 +757,8 @@ TEST_DATABASE_URL=postgres://... pnpm test       # a real Postgres; one uniquely
 
 The real run never touches `public`. It adds the runtime-role tests: a role
 made by `ensureRuntimeRole` with the lists above may insert and call
-`audit_erase_person`, and may not update, delete or truncate.
+`audit_erase_person`, and may not update, delete or truncate. It also runs
+`sign()` over `drizzle-orm/postgres-js` with a client per request.
 
 ## Release
 
