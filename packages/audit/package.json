@@ -1,6 +1,6 @@
 {
   "name": "@wtfalch/audit",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "description": "The estate's append-only audit ledger: the table's shape and walls, erasure, export, readers and a cross-app read handler, with a signer a host builds once inside its trusted base and never exports. Per-app Postgres, a host-supplied vocabulary of closed sets, no framework.",
   "repository": {
     "type": "git",
@@ -14,7 +14,8 @@
     "audit-migrations": "dist/bin/migrations.js",
     "audit-verify-chain": "dist/bin/verify-chain.js",
     "audit-verify-bundle": "dist/bin/verify-bundle.js",
-    "audit-export-bundle": "dist/bin/export-bundle.js"
+    "audit-export-bundle": "dist/bin/export-bundle.js",
+    "audit-migrations-json": "dist/bin/migrations-json.js"
   },
   "exports": {
     ".": {
@@ -33,6 +34,10 @@
       "types": "./dist/migrations-dir.d.ts",
       "default": "./dist/migrations-dir.js"
     },
+    "./migration-list": {
+      "types": "./dist/migration-list.d.ts",
+      "default": "./dist/migration-list.js"
+    },
     "./migrations/*.sql": "./dist/migrations/*.sql",
     "./package.json": "./package.json"
   },
@@ -47,7 +52,9 @@
     "build": "rm -rf dist && tsc -p tsconfig.build.json && mkdir -p dist/migrations && cp src/migrations/*.sql dist/migrations/",
     "prepack": "pnpm build",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run && vitest run --config vitest.workerd.config.ts",
+    "gen:migrations": "node scripts/gen-migration-list.mjs",
+    "test:workerd": "vitest run --config vitest.workerd.config.ts"
   },
   "peerDependencies": {
     "@wtfalch/authz": ">=0.16.0 <0.18.0",
@@ -77,6 +84,7 @@
     }
   },
   "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "0.23.0",
     "@electric-sql/pglite": "^0.5.8",
     "@types/node": "^22",
     "@types/react": "^19",
@@ -87,6 +95,7 @@
     "@wtfalch/design": "0.30.0",
     "drizzle-orm": "0.39.3",
     "jsdom": "^30.0.1",
+    "postgres": "3.4.7",
     "react": "^19",
     "react-dom": "^19",
     "typescript": "^5.9.0",

@@ -69,3 +69,23 @@ describe('the migrations-dir subpath', () => {
     expect(readdirSync(migrationsDir).sort()).toEqual(MIGRATION_FILES);
   });
 });
+
+describe('the root entry point on a Worker', () => {
+  it('imports no node: module on any path its relative imports reach', () => {
+    const visited = new Set<string>();
+    const stack = [join(distRoot, 'index.js')];
+    const nodeSpecifiers: string[] = [];
+    while (stack.length > 0) {
+      // biome-ignore lint/style/noNonNullAssertion: stack.length checked above
+      const file = stack.pop()!;
+      if (visited.has(file)) continue;
+      visited.add(file);
+      for (const specifier of importSpecifiersOf(file)) {
+        if (specifier.startsWith('.')) stack.push(resolve(dirname(file), specifier));
+        else if (specifier.startsWith('node:')) nodeSpecifiers.push(`${file}: ${specifier}`);
+      }
+    }
+    expect(visited.size).toBeGreaterThan(5);
+    expect(nodeSpecifiers).toEqual([]);
+  });
+});
