@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { migrations } from './migration-list.js';
-import { MIGRATION_FILES } from './test/db.js';
+import { APPEND_ONLY, MIGRATION_FILES } from './test/db.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const dist = join(here, '..', 'dist');
@@ -22,6 +22,37 @@ describe('the migration list', () => {
     expect(readdirSync(join(here, 'migrations')).filter((n) => n.endsWith('.sql'))).toHaveLength(
       migrations.length,
     );
+  });
+
+  it('keeps the ids foundry has applied: these nine never change or move', () => {
+    expect(migrations.slice(0, 9).map((m) => m.id)).toEqual([
+      'audit-0001_audit',
+      'audit-0002_display',
+      'audit-0003_erase_email_guard',
+      'audit-0004_chain',
+      'audit-0005_rls',
+      'audit-0006_force_rls',
+      'audit-0007_chain_v2',
+      'audit-0008_checkpoints',
+      'audit-0009_anchors',
+    ]);
+  });
+
+  it('names every table the migrations create in the README appendOnly list', () => {
+    const created = migrations
+      .flatMap((m) => [...m.sql.matchAll(/^create table (?:if not exists )?(\w+)/gim)])
+      .map((match) => match[1])
+      .sort();
+    expect(created).toEqual([...APPEND_ONLY].sort());
+    const readme = readFileSync(join(here, '..', 'README.md'), 'utf8');
+    const section = readme.slice(readme.indexOf('## Cloudflare Workers'));
+    const listed = /appendOnly: \[([^\]]*)\]/.exec(section)?.[1];
+    expect(
+      (listed ?? '')
+        .split(',')
+        .map((n) => n.trim().replaceAll("'", ''))
+        .sort(),
+    ).toEqual(created);
   });
 
   it('has unique ids', () => {
