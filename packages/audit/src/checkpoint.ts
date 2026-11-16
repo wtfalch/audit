@@ -2,6 +2,7 @@ import { asc, desc, eq, gte, sql } from 'drizzle-orm';
 import { canonicalJsonV2 } from './canonical.js';
 import { auditCheckpoints, auditSigningKeys } from './checkpoint-tables.js';
 import type { AuditCheckpointRow } from './checkpoint-tables.js';
+import { type AuditEnvironment, assertProduction } from './environment.js';
 import { CHAIN_LOCK_NAME, type Handle } from './ledger.js';
 import {
   appendLeaf,
@@ -141,9 +142,10 @@ function toCheckpoint(row: AuditCheckpointRow): Checkpoint {
  */
 export async function sealCheckpoint(
   handle: Handle,
-  options: { ledger: string; signer: CheckpointSigner },
+  options: { ledger: string; signer: CheckpointSigner; environment?: AuditEnvironment },
 ): Promise<Checkpoint | null> {
   const { ledger, signer } = options;
+  assertProduction(options.environment, 'sealing a checkpoint');
   if (ledger.length < 1 || ledger.length > 256)
     throw new Error('ledger name must be 1 to 256 characters');
   if (!isHash(signer.publicKey) || !/^[0-9a-f]{64}$/.test(signer.publicKey))

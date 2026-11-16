@@ -14,6 +14,7 @@ import {
   readDerExact,
   sequence,
 } from './der.js';
+import { type AuditEnvironment, assertProduction } from './environment.js';
 import type { Handle } from './ledger.js';
 import { resultRows } from './sql-result.js';
 
@@ -38,6 +39,8 @@ export interface AnchorOptions {
   readonly fetch?: typeof fetch;
   /** The whole request, connection to last byte. Default 10000. */
   readonly timeoutMs?: number;
+  /** `stage` refuses to anchor, before any call. Defaults to production. */
+  readonly environment?: AuditEnvironment;
 }
 
 const hex = (bytes: Uint8Array): string =>
@@ -177,6 +180,7 @@ async function requestAnchor(
  * against roots the auditor chooses.
  */
 export async function anchorCheckpoints(handle: Handle, options: AnchorOptions): Promise<number> {
+  assertProduction(options.environment, 'anchoring');
   const pending = resultRows<{ checkpoint_hash: string }>(
     await handle.execute(sql`
       select c.checkpoint_hash from audit_checkpoints c

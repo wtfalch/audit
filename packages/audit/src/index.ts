@@ -10,6 +10,8 @@ export type { ChainVerifyResult, SealedChain, SealedChainV2, SealInput } from '.
 export { computeErasureHash, sealRow, sealRowV2, verifyChain } from './chain.js';
 export { canonicalJsonV2 } from './canonical.js';
 export type { AnchorOptions } from './anchor.js';
+export type { AuditEnvironment } from './environment.js';
+export { parseEnvironment } from './environment.js';
 export { anchorCheckpoints } from './anchor.js';
 export type { BuildBundleOptions } from './bundle.js';
 export { BUNDLE_FORMAT, BundleRefusal, buildBundle } from './bundle.js';

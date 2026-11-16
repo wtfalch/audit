@@ -3,6 +3,7 @@ import { auditAnchors } from './anchor-tables.js';
 import { canonicalJsonV2 } from './canonical.js';
 import { auditCheckpoints, auditSigningKeys } from './checkpoint-tables.js';
 import { listCheckpoints } from './checkpoint.js';
+import type { AuditEnvironment } from './environment.js';
 import type { Handle } from './ledger.js';
 import { type AuditEventRow, auditEvents } from './tables.js';
 
@@ -36,6 +37,8 @@ export interface BuildBundleOptions {
   readonly from?: number;
   /** Last `seq`: a checkpoint's `tree_size`. Default the newest checkpoint's. */
   readonly to?: number;
+  /** Written to the manifest. Defaults to production. */
+  readonly environment?: AuditEnvironment;
 }
 
 const iso = (date: Date): string => date.toISOString();
@@ -176,6 +179,7 @@ export async function buildBundle(
 
   const manifest = {
     format: BUNDLE_FORMAT,
+    environment: options.environment ?? 'production',
     generated_at: iso(new Date()),
     ledger: options.ledger,
     range: { from, to },
