@@ -12,11 +12,11 @@
  * the root without keeping the tree.
  */
 
+import { toHex } from '@wtfalch/utils/encoding';
+
 const HEX_32 = /^[0-9a-f]{64}$/;
 
-export function toHex(bytes: Uint8Array): string {
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
-}
+export { toHex };
 
 export function fromHex(hex: string): Uint8Array<ArrayBuffer> {
   const out = new Uint8Array(hex.length / 2);
