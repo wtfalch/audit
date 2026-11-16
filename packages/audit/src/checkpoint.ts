@@ -19,6 +19,7 @@ import {
   verifyInclusionPath,
 } from './merkle.js';
 import { resultRows } from './sql-result.js';
+import { verifyTable } from './verify-table.js';
 
 /**
  * Signed Merkle checkpoints. `sealCheckpoint` folds every row sealed since the
@@ -159,6 +160,8 @@ export async function sealCheckpoint(
       .limit(1);
     if (last && last.ledger !== ledger)
       throw new Error('ledger name differs from the previous checkpoint');
+    if (last && last.frontier.length === 0)
+      throw new Error('the last checkpoint is a remote seal; this ledger is sealed remotely');
     let size = last?.treeSize ?? 0;
     let frontier = last ? [...last.frontier] : [];
     for (;;) {
@@ -350,4 +353,234 @@ export function verifyConsistency(
   toRoot: string,
 ): Promise<boolean> {
   return verifyConsistencyNodes(proof.from_size, proof.to_size, proof.nodes, fromRoot, toRoot);
+}
+
+/** A sealer's request: the ledger's name and the head row's sequence and hash. Nothing else leaves the app. */
+export interface SealRequest {
+  ledger: string;
+  seq: number;
+  head_hash: string;
+}
+
+/** Asks a sealer outside the app to sign a head. The app holds no signing key. */
+export interface RemoteSealer {
+  seal(request: SealRequest): Promise<Checkpoint>;
+}
+
+export interface RemoteSealerOptions {
+  /** The sealing address. */
+  url: string;
+  /** The app's own credential, sent as a bearer token. */
+  credential: string;
+  /** Default 10,000. */
+  timeoutMs?: number;
+  /** Default `globalThis.fetch`. */
+  fetch?: typeof globalThis.fetch;
+}
+
+/** A seal the client refused to send, or a head it refused to store. */
+export class SealRefusal extends Error {
+  constructor(
+    readonly reason: 'not_extending' | 'bad_response',
+    message: string,
+  ) {
+    super(message);
+    this.name = 'SealRefusal';
+  }
+}
+
+/**
+ * A sealer that POSTs the request as JSON to `url` with the credential and
+ * expects the signed checkpoint back. A timeout, a non-2xx answer or a body
+ * that is not JSON throws; nothing is skipped silently.
+ */
+export function remoteSealer(options: RemoteSealerOptions): RemoteSealer {
+  const { url, credential } = options;
+  if (!url) throw new Error('url is required');
+  if (!credential) throw new Error('credential is required');
+  const timeoutMs = options.timeoutMs ?? 10_000;
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0)
+    throw new Error('timeoutMs must be a positive number');
+  const doFetch = options.fetch ?? globalThis.fetch;
+  return {
+    async seal(request) {
+      const response = await doFetch(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${credential}` },
+        body: JSON.stringify(request),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      if (!response.ok) throw new Error(`the sealer answered ${response.status}`);
+      return (await response.json()) as Checkpoint;
+    },
+  };
+}
+
+async function chainHead(handle: Handle): Promise<{ seq: number; row_hash: string } | null> {
+  const [row] = resultRows<{ seq: unknown; row_hash: unknown }>(
+    await handle.execute(sql`select seq, row_hash from audit_chain_tail_v2()`),
+  );
+  if (!row || row.seq === null || row.seq === undefined) return null;
+  const seq = Number(row.seq);
+  if (!Number.isSafeInteger(seq) || !isHash(row.row_hash))
+    throw new Error('audit_chain_tail_v2 returned a malformed head');
+  return { seq, row_hash: row.row_hash };
+}
+
+/**
+ * Seals the chain's head through a remote sealer, or returns null when the
+ * head is already sealed. The stored checkpoint has `tree_size` = the head's
+ * `seq`, `root` = the head row's `row_hash` (which commits to every row
+ * before it) and an empty frontier. Refused with `SealRefusal`, before
+ * anything is sent, when the head does not extend the last sealed head: the
+ * row at the last sealed seq must still have the sealed hash and the head
+ * must be past it. The answer must verify under `keys`, the sealer's public
+ * keys the host trusts, and match the request, or it is not stored. Runs in
+ * the advisory-locked transaction, like `sealCheckpoint`.
+ */
+export async function seal(
+  handle: Handle,
+  options: {
+    ledger: string;
+    sealer: RemoteSealer;
+    keys: readonly SigningKey[];
+    environment?: AuditEnvironment;
+  },
+): Promise<Checkpoint | null> {
+  const { ledger, sealer, keys } = options;
+  assertProduction(options.environment, 'sealing a checkpoint');
+  if (ledger.length < 1 || ledger.length > 256)
+    throw new Error('ledger name must be 1 to 256 characters');
+  return handle.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${CHAIN_LOCK_NAME}, 0))`);
+    const [last] = await tx
+      .select()
+      .from(auditCheckpoints)
+      .orderBy(desc(auditCheckpoints.treeSize))
+      .limit(1);
+    if (last && last.ledger !== ledger)
+      throw new Error('ledger name differs from the previous checkpoint');
+    if (last && last.frontier.length > 0)
+      throw new Error('the last checkpoint is a Merkle seal; this ledger is sealed locally');
+    const head = await chainHead(tx);
+    if (!head) return null;
+    if (last) {
+      if (head.seq === last.treeSize && head.row_hash === last.root) return null;
+      const [sealed] = head.seq < last.treeSize ? [] : await readLeaves(tx, last.treeSize - 1, 1);
+      if (
+        head.seq <= last.treeSize ||
+        sealed?.seq !== last.treeSize ||
+        sealed.row_hash !== last.root
+      )
+        throw new SealRefusal(
+          'not_extending',
+          `the head (seq ${head.seq}) does not extend the last sealed head (seq ${last.treeSize})`,
+        );
+    }
+    const answer = await sealer.seal({ ledger, seq: head.seq, head_hash: head.row_hash });
+    if (
+      !answer ||
+      answer.ledger !== ledger ||
+      answer.tree_size !== head.seq ||
+      answer.root !== head.row_hash ||
+      answer.prev_checkpoint !== (last?.checkpointHash ?? null) ||
+      !(await verifyCheckpoint(answer, keys))
+    )
+      throw new SealRefusal(
+        'bad_response',
+        'the sealer returned a checkpoint that does not verify',
+      );
+    const key = keys.find((k) => k.public_key === answer.public_key) as SigningKey;
+    const [stored] = await tx
+      .select()
+      .from(auditSigningKeys)
+      .where(eq(auditSigningKeys.publicKey, key.public_key));
+    if (!stored)
+      await tx.insert(auditSigningKeys).values({
+        publicKey: key.public_key,
+        createdAt: new Date(key.created_at),
+        ...(key.retired_at ? { retiredAt: new Date(key.retired_at) } : {}),
+      });
+    await tx.insert(auditCheckpoints).values({
+      v: 1,
+      ledger,
+      treeSize: answer.tree_size,
+      root: answer.root,
+      prevCheckpoint: answer.prev_checkpoint,
+      createdAt: new Date(answer.created_at),
+      checkpointHash: answer.checkpoint_hash,
+      signature: answer.signature,
+      publicKey: answer.public_key,
+      frontier: [],
+    });
+    return answer;
+  });
+}
+
+export type RemoteVerifyResult =
+  | {
+      ok: true;
+      /** Rows `1..sealed_through` are covered by a verified seal. */
+      sealed_through: number;
+      /** Rows written after the last seal: not verified, only intact so far as the chain links. */
+      unsealed_rows: number;
+    }
+  | {
+      ok: false;
+      reason: 'chain' | 'checkpoint' | 'head' | 'no_seal';
+      /** `audit_events.id` of the first bad row, for `reason: 'chain'`. */
+      id?: number;
+      /** The seq of that row, or of the checkpoint whose head no longer matches. */
+      seq?: number;
+    };
+
+/**
+ * Checks the chain against the stored remote seals and the sealer's public
+ * keys: every checkpoint must verify under `keys` and link to the one before
+ * it, the chain must be intact (a bad row is named by id and seq), and at each
+ * checkpoint's seq the row's hash must still be the sealed one, so a ledger
+ * rewritten from scratch fails at its first seal. Rows after the last seal are
+ * counted as unsealed, never as verified. The handle sees every row.
+ */
+export async function verify(
+  handle: Handle,
+  options: { ledger: string; keys: readonly SigningKey[] },
+): Promise<RemoteVerifyResult> {
+  const rows = await handle.select().from(auditCheckpoints).orderBy(asc(auditCheckpoints.treeSize));
+  const last = rows[rows.length - 1];
+  if (!last) return { ok: false, reason: 'no_seal' };
+  let prev: string | null = null;
+  for (const row of rows) {
+    const checkpoint = toCheckpoint(row);
+    if (
+      row.ledger !== options.ledger ||
+      row.prevCheckpoint !== prev ||
+      !(await verifyCheckpoint(checkpoint, options.keys))
+    )
+      return { ok: false, reason: 'checkpoint', seq: row.treeSize };
+    prev = row.checkpointHash;
+  }
+  const chain = await verifyTable(handle);
+  if (!chain.ok) {
+    const [bad] = resultRows<{ seq: unknown }>(
+      await handle.execute(sql`select seq from audit_events where id = ${chain.id}`),
+    );
+    return {
+      ok: false,
+      reason: 'chain',
+      id: chain.id,
+      ...(bad?.seq === null || bad?.seq === undefined ? {} : { seq: Number(bad.seq) }),
+    };
+  }
+  for (const row of rows) {
+    const [leaf] = await readLeaves(handle, row.treeSize - 1, 1);
+    if (leaf?.seq !== row.treeSize || leaf.row_hash !== row.root)
+      return { ok: false, reason: 'head', seq: row.treeSize };
+  }
+  const head = await chainHead(handle);
+  return {
+    ok: true,
+    sealed_through: last.treeSize,
+    unsealed_rows: (head?.seq ?? 0) - last.treeSize,
+  };
 }
