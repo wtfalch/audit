@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.14.1
+
+- **Authz peer widened to `>=0.16.0 <0.19.0`**, so `@wtfalch/authz` 0.18.0
+  installs with no peer override. Tested against Authz 0.18.0: the full suite
+  (write/read authorization through `access.allows('audit:read', ...)`, the
+  shared resource policy, and migrations) passes on it, and the dev pin moves
+  from 0.17.0 to 0.18.0. No runtime change.
+- **Packed-install fixture** (`src/packed-install.test.ts`): packs this
+  package, installs it with the tested cohort and a plain `npm install`, then
+  type-checks and imports a consumer that builds a ledger from the Authz core,
+  with no type assertions.
+- **Tested compatible cohort, for consumer adoption pins:**
+  `@wtfalch/audit` 0.14.1, `@wtfalch/authz` 0.18.0, `@wtfalch/db` 0.5.2,
+  `@wtfalch/contracts` 0.2.0, `@wtfalch/design` 0.30.0, `drizzle-orm` 0.39.3.
+  `@wtfalch/auth` is not a dependency of this package and is not part of the
+  fixture.
+
 ## 0.14.0
 
 - **Cloudflare Workers.** The main entry is tested on workerd without
