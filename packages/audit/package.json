@@ -1,6 +1,6 @@
 {
   "name": "@wtfalch/audit",
-  "version": "0.14.0",
+  "version": "0.14.1",
   "description": "The estate's append-only audit ledger: the table's shape and walls, erasure, export, readers and a cross-app read handler, with a signer a host builds once inside its trusted base and never exports. Per-app Postgres, a host-supplied vocabulary of closed sets, no framework.",
   "repository": {
     "type": "git",
@@ -57,10 +57,10 @@
     "test:workerd": "vitest run --config vitest.workerd.config.ts"
   },
   "peerDependencies": {
-    "@wtfalch/authz": ">=0.16.0 <0.18.0",
+    "@wtfalch/authz": ">=0.16.0 <0.19.0",
     "@wtfalch/contracts": "^0.2.0",
-    "@wtfalch/design": "^0.30.0",
     "@wtfalch/db": ">=0.5.2 <0.6.0",
+    "@wtfalch/design": "^0.30.0",
     "drizzle-orm": ">=0.39.3 <1.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
@@ -89,7 +89,7 @@
     "@types/node": "^22",
     "@types/react": "^19",
     "@types/react-dom": "^19",
-    "@wtfalch/authz": "0.17.0",
+    "@wtfalch/authz": "0.18.0",
     "@wtfalch/contracts": "0.2.0",
     "@wtfalch/db": "0.5.2",
     "@wtfalch/design": "0.30.0",
